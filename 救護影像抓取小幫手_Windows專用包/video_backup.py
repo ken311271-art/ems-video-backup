@@ -755,27 +755,27 @@ class ArchiveTaskTab(ttk.Frame):
         frame_step2.pack(fill="x", **pad)
         self.frame_step2 = frame_step2
 
-        # 頂部操作列：重新刷新 ＋ 快速讀取 (刷新旁不顯示冗長文字)
+        # 頂部操作列：刷新連線並讀取排班 ＋ 僅重新整理連線
         f_top_btns = ttk.Frame(frame_step2)
         f_top_btns.pack(fill="x", pady=(2, 5))
 
-        self.btn_refresh_bodycams = ttk.Button(
-            f_top_btns,
-            text="🔄 重新刷新連線",
-            command=lambda: self.refresh_device_connections(show_toast=True)
-        )
-        self.btn_refresh_bodycams.pack(side="left", padx=(0, 6))
-
         self.btn_read_roster = ttk.Button(
             f_top_btns,
-            text="⚡ 快速讀取排班",
+            text="⚡ 刷新連線並讀取排班",
             command=self.quick_read_roster
         )
-        self.btn_read_roster.pack(side="left", padx=(0, 8))
+        self.btn_read_roster.pack(side="left", padx=(0, 6))
+
+        self.btn_refresh_bodycams = ttk.Button(
+            f_top_btns,
+            text="🔄 僅重新整理連線",
+            command=lambda: self.refresh_device_connections(show_toast=True)
+        )
+        self.btn_refresh_bodycams.pack(side="left", padx=(0, 8))
 
         self.lbl_roster_hint = ttk.Label(
             f_top_btns,
-            text="(依出勤時段從當月勤務表自動帶入)",
+            text="(自動清空姓名 ➔ 偵測隨身碟 ➔ 依時段帶入排班)",
             foreground="#666666",
             font=('Helvetica', 9)
         )
@@ -1503,7 +1503,28 @@ class ArchiveTaskTab(ttk.Frame):
             messagebox.showwarning("未找到硬碟", f"未找到名稱包含【{label}】的密錄器 3 隨身碟！\n\n請確認設備是否已插妥，或至【快速設定】分頁確認名稱。")
 
     def quick_read_roster(self):
-        """依出勤時間與日期從當月勤務表自動帶入救護班 2 名同仁姓名 (支援 00~08 點前一日排班與月份提醒)"""
+        """【一鍵連線並讀取排班】
+        執行順序：
+        1. 執行前，先把密錄 1、2、3 的姓名全數清空。
+        2. 先執行設備連線偵測 (refresh_device_connections)，更新各隨身碟狀態與開放狀態。
+        3. 再讀取當天排班 Excel，從當天勤務表比對救護班同仁，並依序填入已連線的密錄器。
+        """
+        # 1. 執行前，先把密錄 1、2、3 姓名清空
+        self.entry_name1.set("")
+        self.entry_name2.set("")
+        was_disabled = str(self.entry_name3.cget("state")) == "disabled"
+        if was_disabled:
+            self.entry_name3.config(state="normal")
+        self.entry_name3.set("")
+        if was_disabled:
+            self.entry_name3.config(state="disabled")
+        self.log("🧹 [清空姓名] 已清除密錄器 1、2、3 目前之人員姓名。")
+
+        # 2. 先執行連線
+        self.refresh_device_connections(show_toast=False)
+        self.log("🔄 [設備偵測] 已重新完成各設備連線狀態偵測。")
+
+        # 3. 再讀取班
         ad_year, month, day, err_msg = self.get_parsed_date_info()
         if err_msg:
             messagebox.showwarning("缺少或錯誤的出勤日期", err_msg)
