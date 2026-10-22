@@ -642,8 +642,8 @@ class ArchiveTaskTab(ttk.Frame):
     def create_widgets(self):
         pad = {'padx': 8, 'pady': 3}
 
-        # 1. 步驟 1：案號與出勤時段
-        frame_step1 = ttk.LabelFrame(self, text="【步驟 1：案號與出勤時段】", padding=8)
+        # 1. 步驟 ❶：案號與出勤時段
+        frame_step1 = ttk.LabelFrame(self, text="【步驟 ❶：案號與出勤時段】", padding=8)
         frame_step1.pack(fill="x", **pad)
         self.frame_step1 = frame_step1
 
@@ -750,8 +750,8 @@ class ArchiveTaskTab(ttk.Frame):
         if not init_has_third:
             init_has_third = self.app.config.get("last_has_third", False)
 
-        # 2. 步驟 2：設備連線與出勤人員 (方案 2: 頂部雙核心按鈕 + 1與2號之間互換鍵)
-        frame_step2 = ttk.LabelFrame(self, text="【步驟 2：設備連線與出勤人員】", padding=8)
+        # 2. 步驟 ❷：設備連線與出勤人員
+        frame_step2 = ttk.LabelFrame(self, text="【步驟 ❷：設備連線與出勤人員】", padding=8)
         frame_step2.pack(fill="x", **pad)
         self.frame_step2 = frame_step2
 
@@ -831,8 +831,28 @@ class ArchiveTaskTab(ttk.Frame):
         ttk.Button(f_swap_line, text="🔄 1➔2➔3 輪替", command=self.rotate_names, width=13).pack(side="left", padx=2)
         ttk.Label(f_swap_line, text="↳ (單鍵互換或輪替順移)", foreground="#666666", font=('Helvetica', 9)).pack(side="left", padx=2)
 
-        # 3. 基本設定：行車紀錄器 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
-        frame_dashcam = ttk.LabelFrame(self, text="【基本設定：行車紀錄器】", padding=8)
+        # 3. 步驟 ❸：開始比對並自動複製 (移至路徑設定上方)
+        frame_step3 = ttk.LabelFrame(self, text="【步驟 ❸：開始比對並自動複製】", padding=8)
+        frame_step3.pack(fill="x", **pad)
+        self.frame_step3 = frame_step3
+
+        f_btns = ttk.Frame(frame_step3)
+        f_btns.pack(fill="x", pady=(2, 4))
+
+        self.btn_start = ttk.Button(f_btns, text="🚀 開始比對時段並自動複製", command=self.start_process, style="Action.TButton")
+        self.btn_start.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 4))
+
+        self.btn_pause = ttk.Button(f_btns, text="⛔ 暫停並放棄 (刪除已複製檔案)", command=self.pause_and_cleanup, state="disabled")
+        self.btn_pause.pack(side="right", ipady=6, padx=(4, 0))
+
+        self.progress_bar = ttk.Progressbar(frame_step3, orient="horizontal", mode="determinate")
+        self.progress_bar.pack(fill="x", pady=(4, 3))
+
+        self.lbl_status = ttk.Label(frame_step3, text="狀態：準備就緒", foreground="#0066CC", font=('Helvetica', 9, 'bold'))
+        self.lbl_status.pack(anchor="w")
+
+        # 4. 常設路徑：行車紀錄器 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
+        frame_dashcam = ttk.LabelFrame(self, text="【常設路徑：行車紀錄器】(平時鎖定免更動)", padding=8)
         frame_dashcam.pack(fill="x", **pad)
         self.frame_dashcam = frame_dashcam
 
@@ -862,8 +882,8 @@ class ArchiveTaskTab(ttk.Frame):
         self.btn_browse_dash = ttk.Button(f_dash_src, text="瀏覽...", command=lambda: self.browse_path(self.entry_dashcam_src, "選擇行車紀錄器來源隨身碟"))
         self.btn_browse_dash.pack(side="left", padx=2)
 
-        # 4. 基本設定：密錄器 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
-        frame_bodycam = ttk.LabelFrame(self, text="【基本設定：密錄器】", padding=8)
+        # 5. 常設路徑：密錄器 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
+        frame_bodycam = ttk.LabelFrame(self, text="【常設路徑：密錄器】(平時鎖定免更動)", padding=8)
         frame_bodycam.pack(fill="x", **pad)
         self.frame_bodycam = frame_bodycam
 
@@ -915,25 +935,6 @@ class ArchiveTaskTab(ttk.Frame):
         self.btn_quick_b3.pack(side="left", padx=2)
         self.btn_browse_b3 = ttk.Button(self.f_b3, text="瀏覽...", command=lambda: self.browse_path(self.entry_bodycam3_src, "選擇密錄器 3 來源槽"))
         self.btn_browse_b3.pack(side="left", padx=2)
-
-        # 4. 執行與暫停按鈕
-        frame_action = ttk.Frame(self, padding=2)
-        frame_action.pack(fill="x", **pad)
-
-        f_btns = ttk.Frame(frame_action)
-        f_btns.pack(fill="x")
-
-        self.btn_start = ttk.Button(f_btns, text="🚀 開始比對時段並自動複製", command=self.start_process)
-        self.btn_start.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 4))
-
-        self.btn_pause = ttk.Button(f_btns, text="⛔ 暫停並放棄 (刪除已複製檔案)", command=self.pause_and_cleanup, state="disabled")
-        self.btn_pause.pack(side="right", ipady=6, padx=(4, 0))
-
-        self.progress_bar = ttk.Progressbar(frame_action, orient="horizontal", mode="determinate")
-        self.progress_bar.pack(fill="x", pady=3)
-
-        self.lbl_status = ttk.Label(frame_action, text="狀態：準備就緒", foreground="#0066CC")
-        self.lbl_status.pack(anchor="w")
 
         # 5. 詳細紀錄視窗
         frame_log = ttk.LabelFrame(self, text="【傳輸紀錄】", padding=4)
@@ -2773,6 +2774,9 @@ class VideoBackupApp:
             self.style.configure('TCheckbutton', background=self.bg_color, foreground='#111111')
             self.style.configure('TNotebook', background=self.bg_color)
             self.style.configure('TNotebook.Tab', padding=[12, 5], font=('Helvetica', 10, 'bold'))
+
+        self.style.configure('Action.TButton', font=('Helvetica', 10, 'bold'))
+        self.style.configure('TLabelframe.Label', font=('Helvetica', 10, 'bold'))
 
     def load_config(self):
         default_cfg = {
