@@ -647,53 +647,83 @@ class ArchiveTaskTab(ttk.Frame):
         frame_step1.pack(fill="x", **pad)
         self.frame_step1 = frame_step1
 
-        # 1-1. 案件案號
+        # 1-1. 案件案號 (必須 17 碼)
         f_case_line = ttk.Frame(frame_step1)
         f_case_line.pack(fill="x", pady=2)
-        ttk.Label(f_case_line, text="案件案號 (必填)：", font=('Helvetica', 10, 'bold')).pack(side="left")
-        self.entry_case_no = ttk.Entry(f_case_line, width=20)
+        ttk.Label(f_case_line, text="案件案號 (必填 17 碼)：", font=('Helvetica', 10, 'bold')).pack(side="left")
+        self.entry_case_no = ttk.Entry(f_case_line, width=22, font=('Helvetica', 10))
         self.entry_case_no.pack(side="left", padx=4)
         self.entry_case_no.bind("<KeyRelease>", self.on_case_no_changed)
 
-        ttk.Separator(frame_step1, orient="horizontal").pack(fill="x", pady=4)
+        self.lbl_case_len = ttk.Label(f_case_line, text="（需 17 碼，目前 0 碼）", foreground="#666666")
+        self.lbl_case_len.pack(side="left", padx=4)
 
-        # 1-2. 時段過濾
+        ttk.Separator(frame_step1, orient="horizontal").pack(fill="x", pady=6)
+
+        # 1-2. 時段過濾核取方塊
         self.var_filter_time = tk.BooleanVar(value=True)
-        chk_time = ttk.Checkbutton(frame_step1, text="啟用勤務時段過濾 (自動連續抓取此區間內的多個分割影片)", variable=self.var_filter_time)
-        chk_time.pack(anchor="w")
+        chk_time = ttk.Checkbutton(
+            frame_step1,
+            text="啟用勤務時段過濾 (自動連續抓取此區間內的多個分割影片)",
+            variable=self.var_filter_time
+        )
+        chk_time.pack(anchor="w", pady=(0, 4))
 
-        f_time_line = ttk.Frame(frame_step1)
-        f_time_line.pack(fill="x", pady=2)
+        # 1-3. 直式排列的日期與時間輸入區塊 (Grid)
+        f_time_grid = ttk.Frame(frame_step1)
+        f_time_grid.pack(fill="x", padx=6, pady=2)
 
-        today_8_str = datetime.now().strftime("%Y%m%d")  # 8碼 YYYYMMDD
-        default_start_4 = (datetime.now() - timedelta(hours=2)).strftime("%H%M")  # 4碼 HHMM
-        default_end_4 = ""  # 返隊時間預設空白
-        today_4_dir = datetime.now().strftime("%m%d")
+        now = datetime.now()
+        default_roc_year = str(now.year - 1911)
+        default_mmdd = now.strftime("%m%d")
+        default_start_4 = (now - timedelta(hours=2)).strftime("%H%M")
+        default_end_4 = ""
 
-        ttk.Label(f_time_line, text="出勤日期 (8碼):").pack(side="left")
-        self.entry_date = ttk.Entry(f_time_line, width=10)
-        self.entry_date.insert(0, today_8_str)
-        self.entry_date.pack(side="left", padx=3)
+        # 第一行：年份（民國）（三碼）
+        ttk.Label(f_time_grid, text="出勤年份 (民國 3 碼)：", font=('Helvetica', 9, 'bold'), width=20, anchor="w").grid(row=0, column=0, sticky="w", pady=2)
+        self.entry_year = ttk.Entry(f_time_grid, width=10, font=('Helvetica', 9))
+        self.entry_year.insert(0, default_roc_year)
+        self.entry_year.grid(row=0, column=1, sticky="w", padx=6, pady=2)
+        ttk.Label(f_time_grid, text="（例如：113 或 115，民國年份三碼）", foreground="#666666").grid(row=0, column=2, sticky="w", pady=2)
 
-        ttk.Label(f_time_line, text="出勤時間:").pack(side="left", padx=(8, 0))
-        self.entry_start_time = ttk.Entry(f_time_line, width=6)
+        # 第二行：月份日期（四碼）
+        ttk.Label(f_time_grid, text="月份日期 (4 碼 MMDD)：", font=('Helvetica', 9, 'bold'), width=20, anchor="w").grid(row=1, column=0, sticky="w", pady=2)
+        self.entry_month_day = ttk.Entry(f_time_grid, width=10, font=('Helvetica', 9))
+        self.entry_month_day.insert(0, default_mmdd)
+        self.entry_month_day.grid(row=1, column=1, sticky="w", padx=6, pady=2)
+        ttk.Label(f_time_grid, text="（例如：1023 表示 10 月 23 日）", foreground="#666666").grid(row=1, column=2, sticky="w", pady=2)
+
+        # 第三行：出勤時間
+        ttk.Label(f_time_grid, text="出勤時間 (4 碼 HHMM)：", font=('Helvetica', 9, 'bold'), width=20, anchor="w").grid(row=2, column=0, sticky="w", pady=2)
+        self.entry_start_time = ttk.Entry(f_time_grid, width=10, font=('Helvetica', 9))
         self.entry_start_time.insert(0, default_start_4)
-        self.entry_start_time.pack(side="left", padx=2)
+        self.entry_start_time.grid(row=2, column=1, sticky="w", padx=6, pady=2)
+        ttk.Label(f_time_grid, text="（24小時制，例如：1900、0830）", foreground="#666666").grid(row=2, column=2, sticky="w", pady=2)
 
-        ttk.Label(f_time_line, text="返隊時間:").pack(side="left", padx=(6, 0))
-        self.entry_end_time = ttk.Entry(f_time_line, width=6)
+        # 第四行：返隊時間
+        ttk.Label(f_time_grid, text="返隊時間 (選填 4 碼)：", font=('Helvetica', 9, 'bold'), width=20, anchor="w").grid(row=3, column=0, sticky="w", pady=2)
+        self.entry_end_time = ttk.Entry(f_time_grid, width=10, font=('Helvetica', 9))
         self.entry_end_time.insert(0, default_end_4)
-        self.entry_end_time.pack(side="left", padx=2)
-        ttk.Label(f_time_line, text="(4碼 24小時制，返隊留空抓最新)", foreground="#666666").pack(side="left", padx=4)
+        self.entry_end_time.grid(row=3, column=1, sticky="w", padx=6, pady=2)
+        ttk.Label(f_time_grid, text="（選填，留空自動抓到出勤後最新影片）", foreground="#666666").grid(row=3, column=2, sticky="w", pady=2)
 
-        self.entry_date.bind('<KeyRelease>', lambda e: self.on_date_time_changed())
-        self.entry_date.bind('<FocusOut>', lambda e: self.on_date_time_changed())
+        # 綁定即時事件
+        self.entry_year.bind('<KeyRelease>', lambda e: self.on_date_time_changed())
+        self.entry_year.bind('<FocusOut>', lambda e: self.on_date_time_changed())
+        self.entry_month_day.bind('<KeyRelease>', lambda e: self.on_date_time_changed())
+        self.entry_month_day.bind('<FocusOut>', lambda e: self.on_date_time_changed())
         self.entry_start_time.bind('<KeyRelease>', lambda e: self.on_date_time_changed())
         self.entry_start_time.bind('<FocusOut>', lambda e: self.on_date_time_changed())
 
         f_note_line = ttk.Frame(frame_step1)
-        f_note_line.pack(fill="x", pady=(1, 2))
-        ttk.Label(f_note_line, text=f"↳ 備註：今日外層目錄代碼自動為 [{today_4_dir}]，內層依案號與同仁姓名分類。", foreground="#007ACC", font=('Helvetica', 9)).pack(side="left")
+        f_note_line.pack(fill="x", pady=(3, 1))
+        self.lbl_note = ttk.Label(
+            f_note_line,
+            text=f"↳ 備註：今日外層目錄代碼自動為 [{default_mmdd}]，內層依 17 碼案號與同仁姓名分類。",
+            foreground="#007ACC",
+            font=('Helvetica', 9)
+        )
+        self.lbl_note.pack(side="left")
 
         # 需求 2: 軟體啟動時先依據前一個任務的紀錄帶入同仁姓名
         # 若已有其他分頁（例如點擊 [ ➕ ] 新增），則優先繼承前一個分頁的同仁
@@ -923,17 +953,74 @@ class ArchiveTaskTab(ttk.Frame):
         )
         self.txt_log.pack(fill="both", expand=True)
 
+    def get_parsed_date_info(self):
+        """解析當前分頁輸入之民國年份與月日
+        回傳: (ad_year, month, day, error_msg)
+        """
+        year_str = self.entry_year.get().strip() if hasattr(self, 'entry_year') else ""
+        md_str = self.entry_month_day.get().strip() if hasattr(self, 'entry_month_day') else ""
+
+        if not year_str or not md_str:
+            return None, None, None, "請填寫出勤年份（民國3碼）與月份日期（4碼）！"
+
+        # 驗證年份 (民國 2 或 3 碼數字，例如 113、115)
+        if not (year_str.isdigit() and len(year_str) in (2, 3)):
+            return None, None, None, f"出勤年份格式錯誤：【{year_str}】\n請輸入民國 3 碼數字（例如：113 或 115）！"
+
+        # 驗證月日 (4 碼數字 MMDD)
+        if not (md_str.isdigit() and len(md_str) == 4):
+            return None, None, None, f"月份日期格式錯誤：【{md_str}】\n請輸入 4 碼數字 MMDD（例如：1023 表示 10 月 23 日）！"
+
+        roc_year = int(year_str)
+        ad_year = roc_year + 1911
+        month = int(md_str[:2])
+        day = int(md_str[2:])
+
+        if not (1 <= month <= 12 and 1 <= day <= 31):
+            return None, None, None, f"月份日期數值不正確：【{month}月{day}日】\n請檢查月份 (01~12) 與日期 (01~31)！"
+
+        return ad_year, month, day, None
+
+    @property
+    def entry_date(self):
+        """相容性屬性：提供 8 碼 YYYYMMDD 字串"""
+        class _PseudoDateEntry:
+            def __init__(self, tab):
+                self.tab = tab
+            def get(self):
+                ad_y, m, d, _ = self.tab.get_parsed_date_info()
+                if ad_y and m and d:
+                    return f"{ad_y:04d}{m:02d}{d:02d}"
+                return ""
+        return _PseudoDateEntry(self)
+
     def on_case_no_changed(self, event=None):
-        """當輸入案號時，動態更新分頁標題"""
+        """當輸入案號時，即時更新字數統計與分頁標題"""
+        case_no = self.entry_case_no.get().strip()
+        c_len = len(case_no)
+        if hasattr(self, 'lbl_case_len'):
+            if c_len == 0:
+                self.lbl_case_len.config(text="（需 17 碼，目前 0 碼）", foreground="#666666")
+            elif c_len < 17:
+                self.lbl_case_len.config(text=f"⚠️ 需 17 碼，目前 {c_len} 碼 (尚差 {17 - c_len} 碼)", foreground="#D32F2F")
+            elif c_len == 17:
+                self.lbl_case_len.config(text="🟢 已達 17 碼 (格式正確)", foreground="#2E7D32")
+            else:
+                self.lbl_case_len.config(text=f"⚠️ 超過 17 碼，目前 {c_len} 碼 (多出 {c_len - 17} 碼)", foreground="#D32F2F")
         self.app.update_tab_labels()
 
     def on_date_time_changed(self):
-        """當出勤日期或時間變更時，依程式邏輯判斷對應之勤務表檔案，即時更新下拉名冊"""
+        """當出勤日期或時間變更時，依程式邏輯判斷對應之勤務表檔案，即時更新下拉名冊與備註提示"""
+        if hasattr(self, 'lbl_note') and hasattr(self, 'entry_month_day'):
+            md = self.entry_month_day.get().strip()
+            code_str = md if len(md) == 4 and md.isdigit() else datetime.now().strftime("%m%d")
+            self.lbl_note.config(text=f"↳ 備註：今日外層目錄代碼自動為 [{code_str}]，內層依 17 碼案號與同仁姓名分類。")
         self.update_combobox_values()
 
     def get_current_tab_officer_names(self):
         """依當前分頁的出勤日期與時間，依程式邏輯判斷所讀取之勤務表檔案為主取得同仁名單"""
-        date_input = self.entry_date.get().strip() if hasattr(self, 'entry_date') else ""
+        ad_year, m, d, _ = self.get_parsed_date_info()
+        date_input = f"{ad_year:04d}{m:02d}{d:02d}" if (m and d) else ""
         time_input = self.entry_start_time.get().strip() if hasattr(self, 'entry_start_time') else ""
         start_hour = extract_hour(time_input) if time_input else 8
 
@@ -1417,11 +1504,12 @@ class ArchiveTaskTab(ttk.Frame):
 
     def quick_read_roster(self):
         """依出勤時間與日期從當月勤務表自動帶入救護班 2 名同仁姓名 (支援 00~08 點前一日排班與月份提醒)"""
-        date_input = self.entry_date.get().strip()
-        if not date_input:
-            messagebox.showwarning("缺少出勤日期", "請先輸入「出勤日期」（例如 20261020 或 1020）！")
+        ad_year, month, day, err_msg = self.get_parsed_date_info()
+        if err_msg:
+            messagebox.showwarning("缺少或錯誤的出勤日期", err_msg)
             return
 
+        date_input = f"{ad_year:04d}{month:02d}{day:02d}"
         time_input = self.entry_start_time.get().strip()
         if not time_input:
             messagebox.showwarning("缺少出勤時間", "請先輸入「出勤時間」（4碼 24小時制，例如 0830、1200、0330），\n系統才能比對該時段之排班同仁！")
@@ -1434,7 +1522,7 @@ class ArchiveTaskTab(ttk.Frame):
 
         duty_year, duty_month, duty_day, is_prev = get_duty_date(date_input, start_hour)
         if duty_month is None or duty_day is None:
-            messagebox.showwarning("日期格式錯誤", f"無法辨識出勤日期：【{date_input}】\n請輸入正確的日期格式（例如 20261020 或 1020）。")
+            messagebox.showwarning("日期格式錯誤", f"無法辨識出勤日期：【{date_input}】！")
             return
 
         roster_path = self.app.config.get("roster_path", "").strip()
@@ -1723,23 +1811,32 @@ class ArchiveTaskTab(ttk.Frame):
         bodycam3_src = self.entry_bodycam3_src.get().strip()
 
         if not case_no:
-            messagebox.showwarning("欄位缺少", "請填寫【案件案號】！")
+            messagebox.showwarning("欄位缺少", "請填寫【案件案號】（案號規定必須為 17 碼）！")
+            self.entry_case_no.focus()
+            return
+
+        if len(case_no) != 17:
+            messagebox.showerror(
+                "案號長度錯誤",
+                f"案件案號規定【必須為 17 碼】！\n\n"
+                f"• 目前輸入長度：{len(case_no)} 碼\n"
+                f"• 目前輸入內容：【{case_no}】\n\n"
+                f"請檢查並補齊 17 碼完整派遣案號後再繼續。"
+            )
+            self.entry_case_no.focus()
             return
 
         start_dt = None
         end_dt = None
         if self.var_filter_time.get():
-            date_part = self.entry_date.get().strip()
+            ad_year, month, day, err_msg = self.get_parsed_date_info()
+            if err_msg:
+                messagebox.showerror("出勤日期格式錯誤", err_msg)
+                return
+
+            date_part = f"{ad_year:04d}{month:02d}{day:02d}"
             start_part = self.entry_start_time.get().strip()
             end_part = self.entry_end_time.get().strip()
-
-            try:
-                if len(date_part) != 8 or not date_part.isdigit():
-                    raise ValueError
-                parsed_date = datetime.strptime(date_part, "%Y%m%d")
-            except ValueError:
-                messagebox.showerror("時間格式錯誤", "出勤日期格式錯誤！\n格式需為 8 碼數字（例：20261020）")
-                return
 
             try:
                 if len(start_part) != 4 or not start_part.isdigit():
@@ -2116,7 +2213,7 @@ class ArchiveTaskTab(ttk.Frame):
 
     def run_copy_task(self, case_no, dashcam_target, bodycam_target, start_dt, end_dt, precheck_results):
         try:
-            today_mmdd = datetime.now().strftime("%m%d")
+            today_mmdd = start_dt.strftime("%m%d") if start_dt else datetime.now().strftime("%m%d")
             opened_folders = []
             device_copied_counts = {
                 "dashcam": 0,
@@ -2474,14 +2571,28 @@ class ArchiveTaskTab(ttk.Frame):
         dlg.wait_window()
 
     def reset_case_fields(self):
-        """需求：使用者按確認後，該分頁的案號、出勤時間、返隊時間、出勤人員姓名皆恢復預設（空白），並重新刷新連線狀態"""
+        """使用者按確認後，該分頁的案號、出勤時間、返隊時間、出勤人員姓名皆恢復預設，並重新刷新連線狀態"""
+        now = datetime.now()
         self.entry_case_no.delete(0, tk.END)
+        self.on_case_no_changed()
+
+        if hasattr(self, 'entry_year'):
+            self.entry_year.delete(0, tk.END)
+            self.entry_year.insert(0, str(now.year - 1911))
+
+        if hasattr(self, 'entry_month_day'):
+            self.entry_month_day.delete(0, tk.END)
+            self.entry_month_day.insert(0, now.strftime("%m%d"))
+
         self.entry_start_time.delete(0, tk.END)
+        self.entry_start_time.insert(0, (now - timedelta(hours=2)).strftime("%H%M"))
+
         self.entry_end_time.delete(0, tk.END)
         self.entry_name1.delete(0, tk.END)
         self.entry_name2.delete(0, tk.END)
         self.entry_name3.delete(0, tk.END)
 
+        self.on_date_time_changed()
         self.refresh_device_connections()
         self.app.update_tab_labels()
 
