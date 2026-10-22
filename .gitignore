@@ -40,5 +40,5 @@ dist/
 
 # 大型編譯產出物（建議上傳至 GitHub Releases 分享）
 *.app/
-救護影像抓取小幫手-十九甲分隊.exe
-救護影像抓取小幫手_Mac專用.zip
+*.exe
+救護影像抓取小幫手_Mac專用*.zip
