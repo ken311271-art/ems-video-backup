@@ -755,7 +755,7 @@ class ArchiveTaskTab(ttk.Frame):
         frame_step2.pack(fill="x", **pad)
         self.frame_step2 = frame_step2
 
-        # 頂部操作列：刷新連線並讀取排班 ＋ 僅重新整理連線
+        # 頂部操作列：單一核心按鈕（刷新連線並讀取排班）
         f_top_btns = ttk.Frame(frame_step2)
         f_top_btns.pack(fill="x", pady=(2, 5))
 
@@ -764,14 +764,7 @@ class ArchiveTaskTab(ttk.Frame):
             text="⚡ 刷新連線並讀取排班",
             command=self.quick_read_roster
         )
-        self.btn_read_roster.pack(side="left", padx=(0, 6))
-
-        self.btn_refresh_bodycams = ttk.Button(
-            f_top_btns,
-            text="🔄 僅重新整理連線",
-            command=lambda: self.refresh_device_connections(show_toast=True)
-        )
-        self.btn_refresh_bodycams.pack(side="left", padx=(0, 8))
+        self.btn_read_roster.pack(side="left", padx=(0, 8))
 
         self.lbl_roster_hint = ttk.Label(
             f_top_btns,
