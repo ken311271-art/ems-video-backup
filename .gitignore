@@ -1,0 +1,44 @@
+# Python 暫存與快取
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 虛擬環境
+.venv/
+venv/
+env/
+
+# PyInstaller 編譯快取與產出目錄
+build/
+dist/
+*.spec
+*.manifest
+
+# macOS 系統暫存檔
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# 編輯器與備份暫存檔
+.vscode/
+.idea/
+*.swp
+*.bak*
+*.new
+
+# 私人分隊專用配置備份 (避免推送到公開 GitHub)
+*shijia*
+*.local.*
+
+# 舊版歷史備份目錄與檔案
+救護影像抓取小幫手(備份)_Windows專用包/
+救護影像抓取小幫手(備份)_Windows專用包.zip
+救護影像歸檔工具_Windows專用包/
+救護影像歸檔工具_Windows專用包.zip
+
+# 大型編譯產出物（建議上傳至 GitHub Releases 分享）
+*.app/
+救護影像抓取小幫手-十九甲分隊.exe
+救護影像抓取小幫手_Mac專用.zip

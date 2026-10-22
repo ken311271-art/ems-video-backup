@@ -1,0 +1,38 @@
+{
+  "station_name": "消防分隊",
+  "roster_path": "",
+  "missing_reasons": [
+    "設備沒電",
+    "同仁未配戴",
+    "未開機",
+    "設備故障",
+    "記憶卡讀取異常",
+    "鏡頭髒污無效"
+  ],
+  "label_dashcam": "DASHCAM",
+  "label_bodycam1": "BODYCAM1",
+  "label_bodycam2": "BODYCAM2",
+  "label_bodycam3": "BODYCAM3",
+  "cached_officer_names": [
+    "隊員A",
+    "隊員B",
+    "隊員C",
+    "隊員D",
+    "隊員E",
+    "隊員F",
+    "隊員G",
+    "隊員H",
+    "隊員I",
+    "隊員J",
+    "隊員K",
+    "隊員L",
+    "隊員M",
+    "隊員N",
+    "隊員O",
+    "隊員P",
+    "隊員Q",
+    "隊員R",
+    "隊員S",
+    "隊員T"
+  ]
+}
