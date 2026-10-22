@@ -676,7 +676,7 @@ class ArchiveTaskTab(ttk.Frame):
         now = datetime.now()
         default_roc_year = str(now.year - 1911)
         default_mmdd = now.strftime("%m%d")
-        default_start_4 = (now - timedelta(hours=2)).strftime("%H%M")
+        default_start_4 = (now - timedelta(hours=1)).strftime("%H%M")
         default_end_4 = ""
 
         # 第一行：年份（民國）（三碼）
@@ -2585,7 +2585,7 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_month_day.insert(0, now.strftime("%m%d"))
 
         self.entry_start_time.delete(0, tk.END)
-        self.entry_start_time.insert(0, (now - timedelta(hours=2)).strftime("%H%M"))
+        self.entry_start_time.insert(0, (now - timedelta(hours=1)).strftime("%H%M"))
 
         self.entry_end_time.delete(0, tk.END)
         self.entry_name1.delete(0, tk.END)
