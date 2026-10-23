@@ -815,6 +815,12 @@ class ArchiveTaskTab(ttk.Frame):
         ttk.Label(f_dash_status, text="行車紀錄器狀態：", width=14).pack(side="left")
         self.lbl_status_dashcam = ttk.Label(f_dash_status, text="⚪ 未檢測", foreground="#888888", font=('Helvetica', 9))
         self.lbl_status_dashcam.pack(side="left", padx=2)
+        self.var_swap_dashcam = tk.BooleanVar(value=True)
+        self.chk_swap_dashcam = ttk.Checkbutton(
+            f_dash_status,
+            text="本次需換卡複製行車紀錄器",
+            variable=self.var_swap_dashcam
+        )
 
         # 列 1: 密錄器 1 同仁
         f_name1 = ttk.Frame(frame_step2)
@@ -1172,12 +1178,15 @@ class ArchiveTaskTab(ttk.Frame):
         curr_state = str(self.entry_name3.cget("state"))
         if curr_state == "disabled":
             self.entry_name3.config(state="normal")
-            self.lbl_status_name3.config(text="🔓 已手動解鎖", foreground="#E65100")
+            self.lbl_status_name3.config(text="🔓 已手動解鎖 (待換卡)", foreground="#E65100")
             self.btn_manual_unlock3.config(text="🔒 手動鎖定")
-            self.log("ℹ️ 已手動解鎖密錄器 3 同仁輸入欄位。")
+            self.log("ℹ️ 已手動解鎖密錄器 3 同仁輸入欄位 (待換卡)。")
         else:
+            self.entry_name3.set("")
             self.entry_name3.config(state="disabled")
             self.btn_manual_unlock3.config(text="🔓 手動解鎖")
+            self.lbl_status_name3.config(text="⚪ 未連線 (共用槽)", foreground="#888888")
+            self.log("ℹ️ 已手動鎖定並清空密錄器 3 同仁輸入欄位。")
             self.refresh_device_connections()
 
     def refresh_device_connections(self, show_toast=False):
@@ -1260,6 +1269,8 @@ class ArchiveTaskTab(ttk.Frame):
                 # 讀卡機未插入
                 if hasattr(self, 'lbl_status_dashcam'):
                     self.lbl_status_dashcam.config(text="⚪ 未連線", foreground="#888888")
+                if hasattr(self, 'chk_swap_dashcam'):
+                    self.chk_swap_dashcam.pack_forget()
                 if is_manual_unlocked3:
                     self.entry_name3.config(state="normal")
                     self.lbl_status_name3.config(text="🔓 已手動解鎖", foreground="#E65100")
@@ -1275,19 +1286,30 @@ class ArchiveTaskTab(ttk.Frame):
                     # 讀卡機目前插著行車紀錄器
                     if hasattr(self, 'lbl_status_dashcam'):
                         self.lbl_status_dashcam.config(text="🟢 已連線", foreground="#2E7D32")
-                    # 密錄器 3 處於共用讀卡機待換卡狀態，不報錯且自動開放輸入！
-                    self.entry_name3.config(state="normal")
-                    self.lbl_status_name3.config(text="⏳ 待換卡 (共用讀卡機)", foreground="#E65100")
+                    if hasattr(self, 'chk_swap_dashcam'):
+                        self.chk_swap_dashcam.pack_forget()
+
+                    # 該槽放的是行車記錄器卡片，沒放密錄器3卡片不可填人名；需使用者手動解鎖或排班自動解鎖才開放
+                    if is_manual_unlocked3:
+                        self.entry_name3.config(state="normal")
+                        self.lbl_status_name3.config(text="🔓 已手動解鎖 (待換卡)", foreground="#E65100")
+                    else:
+                        self.entry_name3.config(state="disabled")
+                        self.lbl_status_name3.config(text="⚪ 未連線 (共用槽)", foreground="#888888")
                 elif is_b3_card:
                     # 讀卡機目前插著密錄器 3
                     self.entry_name3.config(state="normal")
                     self.lbl_status_name3.config(text="🟢 已連線", foreground="#2E7D32")
                     if hasattr(self, 'lbl_status_dashcam'):
-                        self.lbl_status_dashcam.config(text="⏳ 待換卡 (共用讀卡機)", foreground="#E65100")
+                        self.lbl_status_dashcam.config(text="⚪ 未連線 (共用槽)", foreground="#888888")
+                    if hasattr(self, 'chk_swap_dashcam'):
+                        self.chk_swap_dashcam.pack(side="left", padx=8)
                 else:
                     # 插了非預期隨身碟（標籤皆不相符）
                     if hasattr(self, 'lbl_status_dashcam'):
                         self.lbl_status_dashcam.config(text="🔴 標籤不符", foreground="#C62828")
+                    if hasattr(self, 'chk_swap_dashcam'):
+                        self.chk_swap_dashcam.pack_forget()
                     if is_manual_unlocked3:
                         self.entry_name3.config(state="normal")
                         self.lbl_status_name3.config(text="🔓 已手動解鎖", foreground="#E65100")
@@ -1295,6 +1317,8 @@ class ArchiveTaskTab(ttk.Frame):
                         self.entry_name3.config(state="disabled")
                         self.lbl_status_name3.config(text="🔴 標籤不符", foreground="#C62828")
         else:
+            if hasattr(self, 'chk_swap_dashcam'):
+                self.chk_swap_dashcam.pack_forget()
             # 獨立插槽情況
             # 行車紀錄器獨立驗證
             is_dash, _ = is_device_connected(curr_dash, label_dash)
@@ -1727,6 +1751,7 @@ class ArchiveTaskTab(ttk.Frame):
             return
 
         # 1. 先刷新設備連線，確保取得各密錄器最新連線與開放狀態
+        # 嚴格遵循：看使用者插入哪幾個密錄器，才開放有連線的密錄器；未連線者保持鎖定
         self.refresh_device_connections(show_toast=False)
 
         # 2. 取得所有目前「開放／已連線」之密錄器插槽 (按 1 -> 2 -> 3 順序)
@@ -1925,23 +1950,38 @@ class ArchiveTaskTab(ttk.Frame):
         reader_phase2 = None
 
         req_dash = bool(dashcam_src)
-        req_b3 = bool(name3 or bodycam3_src)
+        req_b3 = bool(name3)  # 密錄器 3 僅在使用者有輸入人名時才視為需執行之任務
 
-        if req_dash and req_b3:
-            dash_drive = os.path.splitdrive(os.path.abspath(dashcam_src))[0].upper() if dashcam_src else ""
-            b3_drive = os.path.splitdrive(os.path.abspath(bodycam3_src))[0].upper() if bodycam3_src else ""
-            same_drive = (dash_drive and b3_drive and dash_drive == b3_drive)
+        dash_drive = os.path.splitdrive(os.path.abspath(dashcam_src))[0].upper() if dashcam_src else ""
+        b3_drive = os.path.splitdrive(os.path.abspath(bodycam3_src))[0].upper() if bodycam3_src else ""
+        same_drive = bool(dash_drive and b3_drive and dash_drive == b3_drive)
 
-            if same_drive or (dash_conn and not b3_conn) or (b3_conn and not dash_conn):
-                is_shared_reader = True
-                if dash_conn:
-                    reader_phase1 = "dashcam"
+        if same_drive or (dashcam_src and bodycam3_src and os.path.abspath(dashcam_src).upper() == os.path.abspath(bodycam3_src).upper()):
+            if dash_conn:
+                reader_phase1 = "dashcam"
+                # 狀況一：共用槽目前插著行車記錄器
+                # 只有當使用者有 KEY 密錄器 3 人員，行車記錄器複製完後才排入第二階段換卡
+                if name3:
                     reader_phase2 = "bodycam3"
-                elif b3_conn:
-                    reader_phase1 = "bodycam3"
-                    reader_phase2 = "dashcam"
+                    is_shared_reader = True
                 else:
+                    reader_phase2 = None
+                    is_shared_reader = False  # 若未填人員，則行車記錄器跑完就好，不用跳換卡
+            elif b3_conn:
+                reader_phase1 = "bodycam3"
+                # 狀況二：共用槽只插密錄器 3
+                # 依「本次需換卡複製行車紀錄器」勾選狀態決定
+                want_dash = self.var_swap_dashcam.get() if hasattr(self, 'var_swap_dashcam') else True
+                if want_dash:
+                    reader_phase2 = "dashcam"
+                    is_shared_reader = True
+                    req_dash = True
+                else:
+                    reader_phase2 = None
                     is_shared_reader = False
+                    req_dash = False  # 未勾選則密錄器 3 跑完就好，不用跳換卡
+            else:
+                is_shared_reader = False
 
         precheck_results = []
 
