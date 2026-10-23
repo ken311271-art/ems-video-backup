@@ -1866,6 +1866,9 @@ class ArchiveTaskTab(ttk.Frame):
         self.active_created_folders = []
 
     def start_process(self):
+        # 關鍵修復：每次開始比對前，立即重置中斷旗標，確保隨身碟搜尋不會被殘留中斷旗標提前中斷！
+        self.stop_requested.clear()
+
         case_no = self.entry_case_no.get().strip()
         dashcam_target = self.entry_dashcam_target.get().strip()
         bodycam_target = self.entry_bodycam_target.get().strip()
@@ -2573,6 +2576,7 @@ class ArchiveTaskTab(ttk.Frame):
             self.show_error_async("錯誤", f"複製過程中發生問題：\n{str(e)}")
         finally:
             self.is_copying = False
+            self.stop_requested.clear()
             def _reset_btns():
                 try:
                     self.btn_start.config(state="normal")
@@ -2688,6 +2692,7 @@ class ArchiveTaskTab(ttk.Frame):
         self.lbl_status.config(text="狀態：已暫停並刪除資料夾", foreground="#CC0000")
         self.log("🛑 作業已終止，正在執行資料夾清除動作...")
         self.cleanup_active_folders()
+        self.stop_requested.clear()
         self.log("✨ 清理完畢！未保留任何殘留檔案。")
         self.progress_bar["value"] = 0
         messagebox.showinfo("已暫停並清除", "複製作業已成功暫停！\n本次已建立之資料夾與未完成檔案已全數刪除還原。")
