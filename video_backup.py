@@ -2911,30 +2911,24 @@ class VideoBackupApp:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=6, pady=6)
 
-        # 初始第 1 個勤務作業分頁
-        self.add_new_task_tab()
-
-        # 「➕」新增分頁標籤（點擊時自動新增一個任務分頁）
+        # 1. 「➕」新增分頁標籤（固定置於最左側，點擊時立即新增任務分頁）
         self.dummy_plus_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.dummy_plus_tab, text=" ➕ ")
 
-        # 快速設定分頁
+        # 2. 初始第 1 個勤務作業分頁
+        first_tab = self.add_new_task_tab()
+
+        # 3. 快速設定分頁（固定置於最右側）
         self.tab_settings = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_settings, text=" ⚙️ 快速設定 ")
         self.setup_settings_tab(self.tab_settings)
+        self.notebook.add(self.tab_settings, text=" ⚙️ 快速設定 ")
+
+        # 預設選取第 1 個勤務作業分頁（避免一開程式選在最左側的 ➕）
+        self.notebook.select(first_tab)
 
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
         self.notebook.bind("<Button-1>", self.on_notebook_click)
         self.update_tab_labels()
-
-        # 當切換到任務分頁時，自動執行連線刷新
-        try:
-            for tab in self.task_tabs:
-                if str(tab) == str(selected_widget):
-                    tab.refresh_device_connections(show_toast=False)
-                    break
-        except Exception:
-            pass
 
     def update_tab_labels(self):
         """更新分頁標籤顯示：當前選取的分頁標題左側顯示『✕』，其餘顯示『📁』"""
@@ -2980,6 +2974,12 @@ class VideoBackupApp:
         except Exception:
             return
 
+        # 若點擊最左側「➕」標籤，直接建立新任務分頁並選取
+        if hasattr(self, 'dummy_plus_tab') and str(clicked_tab_widget) == str(self.dummy_plus_tab):
+            new_tab = self.add_new_task_tab()
+            self.notebook.select(new_tab)
+            return "break"
+
         # 若點擊的是當前已選取中的任務分頁
         if str(clicked_tab_widget) == str(sel_widget):
             matched_tab = None
@@ -3020,14 +3020,24 @@ class VideoBackupApp:
 
         self.update_tab_labels()
 
+        # 當切換到任務分頁時，自動執行連線刷新
+        try:
+            for tab in self.task_tabs:
+                if str(tab) == str(selected_widget):
+                    tab.refresh_device_connections(show_toast=False)
+                    break
+        except Exception:
+            pass
+
     def add_new_task_tab(self):
         """動態新增一個歸檔任務分頁"""
         new_tab = ArchiveTaskTab(self.notebook, self, tab_id=self.next_tab_id)
         self.task_tabs.append(new_tab)
 
-        if hasattr(self, 'dummy_plus_tab') and self.dummy_plus_tab in self.notebook.tabs():
-            plus_idx = self.notebook.index(self.dummy_plus_tab)
-            self.notebook.insert(plus_idx, new_tab, text=f" 📁 任務 #{self.next_tab_id} ")
+        # 保持「➕」固定在最左邊 (Index 0)，設定分頁在最右邊，新任務分頁插入在設定分頁之前
+        if hasattr(self, 'tab_settings') and str(self.tab_settings) in self.notebook.tabs():
+            settings_idx = self.notebook.index(self.tab_settings)
+            self.notebook.insert(settings_idx, new_tab, text=f" 📁 任務 #{self.next_tab_id} ")
         else:
             self.notebook.add(new_tab, text=f" 📁 任務 #{self.next_tab_id} ")
 
