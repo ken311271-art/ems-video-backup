@@ -532,12 +532,12 @@ def get_all_connected_disks():
                         disks.append((p, item))
     return disks
 
-def find_drive_by_label(target_label):
-    """根據預設的硬碟標籤名稱尋找對應的磁碟路徑"""
+def find_drive_by_label(target_label, connected_disks=None):
+    """根據預設的硬碟標籤名稱尋找對應的磁碟路徑，支援複用已查詢的磁碟快取清單以大幅提速"""
     if not target_label or not target_label.strip():
         return None, None
     clean_target = target_label.strip().upper()
-    disks = get_all_connected_disks()
+    disks = connected_disks if connected_disks is not None else get_all_connected_disks()
     for path, name in disks:
         if clean_target == name.upper() or clean_target in name.upper():
             return path, name
@@ -636,8 +636,8 @@ class ArchiveTaskTab(ttk.Frame):
             self.apply_lock_dashcam(True)
         if self.is_bodycam_locked:
             self.apply_lock_bodycam(True)
-        # 初始化時檢測密錄器連線
-        self.refresh_device_connections(show_toast=False)
+        # 🚀 啟動性能優化：非同步延遲 50ms 檢測硬體連線，讓主視窗第一時間秒顯在螢幕上
+        self.after(50, lambda: self.refresh_device_connections(show_toast=False))
 
     def create_widgets(self):
         pad = {'padx': 8, 'pady': 3}
@@ -1164,7 +1164,8 @@ class ArchiveTaskTab(ttk.Frame):
         label_b2 = self.app.config.get("label_bodycam2", "BODYCAM2").strip()
         label_b3 = self.app.config.get("label_bodycam3", "BODYCAM3").strip()
 
-        # 1. 先嘗試以硬碟標籤自動識別路徑 (若欄位為空或當前路徑無效)
+        # 1. 取得一次連線磁碟快取，避免重複呼叫底層系統 API
+        all_disks = get_all_connected_disks()
         for src_entry, exp_lbl in [
             (self.entry_dashcam_src, label_dash),
             (self.entry_bodycam1_src, label_b1),
@@ -1173,7 +1174,7 @@ class ArchiveTaskTab(ttk.Frame):
         ]:
             curr = src_entry.get().strip()
             if not curr or not os.path.exists(curr):
-                fp, _ = find_drive_by_label(exp_lbl)
+                fp, _ = find_drive_by_label(exp_lbl, connected_disks=all_disks)
                 if fp:
                     src_entry.delete(0, tk.END)
                     src_entry.insert(0, fp)
@@ -2648,13 +2649,15 @@ class VideoBackupApp:
         else:
             self.officer_names = list(DEFAULT_OFFICER_NAMES)
 
-        self.load_officer_names_from_roster()
         self.setup_styles()
         self.create_widgets()
         self.update_comboboxes_all_tabs()
         self.root.update_idletasks()
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self.on_app_close)
+
+        # 🚀 啟動性能優化：非同步延遲 150ms 載入勤務表，讓視窗秒開，不卡主執行緒
+        self.root.after(150, self.load_officer_names_from_roster)
 
     def on_app_close(self):
         """軟體關閉時自動儲存當前設定與任務同仁紀錄"""
