@@ -1,18 +1,16 @@
 {
-  "station_name": "消防分隊",
-  "roster_path": "",
-  "missing_reasons": [
-    "設備沒電",
-    "同仁未配戴",
-    "未開機",
-    "設備故障",
-    "記憶卡讀取異常",
-    "鏡頭髒污無效"
-  ],
-  "label_dashcam": "DASHCAM",
-  "label_bodycam1": "BODYCAM1",
-  "label_bodycam2": "BODYCAM2",
-  "label_bodycam3": "BODYCAM3",
+  "dashcam_target": "/Users/ken311271/Desktop/行車紀錄器影像",
+  "dashcam_src": "",
+  "bodycam_target": "/Users/ken311271/Desktop/密錄器影像",
+  "bodycam1_src": "",
+  "bodycam2_src": "",
+  "bodycam3_src": "",
+  "is_dashcam_locked": false,
+  "is_bodycam_locked": false,
+  "last_name1": "丙",
+  "last_name2": "乙",
+  "last_name3": "甲",
+  "last_has_third": false,
   "cached_officer_names": [
     "隊員A",
     "隊員B",
@@ -34,5 +32,22 @@
     "隊員R",
     "隊員S",
     "隊員T"
-  ]
+  ],
+  "missing_reasons": [
+    "設備沒電",
+    "同仁未配戴",
+    "未開機",
+    "設備故障",
+    "記憶卡讀取異常",
+    "鏡頭髒污無效"
+  ],
+  "name1": "",
+  "name2": "",
+  "name3": "",
+  "label_dashcam": "DASHCAM",
+  "label_bodycam1": "BODYCAM1",
+  "label_bodycam2": "BODYCAM2",
+  "label_bodycam3": "BODYCAM3",
+  "roster_path": "",
+  "station_name": "消防分隊"
 }

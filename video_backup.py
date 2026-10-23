@@ -631,7 +631,25 @@ class ArchiveTaskTab(ttk.Frame):
         self.is_dashcam_locked = self.app.config.get("is_dashcam_locked", False)
         self.is_bodycam_locked = self.app.config.get("is_bodycam_locked", False)
 
+        # 建立防裁切平滑捲動 Canvas 容器 (自適應各尺寸筆電螢幕，支援滑鼠滾輪)
+        self.canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0, bg=self.app.bg_color)
+        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.content_frame = ttk.Frame(self.canvas)
+
+        self.content_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+        self.canvas_win = self.canvas.create_window((0, 0), window=self.content_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        self.canvas.bind('<Configure>', lambda e: self.canvas.itemconfig(self.canvas_win, width=e.width))
+
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+
         self.create_widgets()
+        self._bind_mousewheel(self.content_frame)
+
         if self.is_dashcam_locked:
             self.apply_lock_dashcam(True)
         if self.is_bodycam_locked:
@@ -639,11 +657,28 @@ class ArchiveTaskTab(ttk.Frame):
         # 🚀 啟動性能優化：非同步延遲 50ms 檢測硬體連線，讓主視窗第一時間秒顯在螢幕上
         self.after(50, lambda: self.refresh_device_connections(show_toast=False))
 
+    def _bind_mousewheel(self, widget):
+        widget.bind("<MouseWheel>", self._on_mousewheel, add="+")
+        widget.bind("<Button-4>", self._on_mousewheel, add="+")
+        widget.bind("<Button-5>", self._on_mousewheel, add="+")
+        for child in widget.winfo_children():
+            self._bind_mousewheel(child)
+
+    def _on_mousewheel(self, event):
+        if sys.platform == "darwin":
+            self.canvas.yview_scroll(int(-1 * event.delta), "units")
+        elif event.num == 5:
+            self.canvas.yview_scroll(2, "units")
+        elif event.num == 4:
+            self.canvas.yview_scroll(-2, "units")
+        else:
+            self.canvas.yview_scroll(int(-1 * (event.delta / 60)), "units")
+
     def create_widgets(self):
         pad = {'padx': 8, 'pady': 3}
 
         # 1. 步驟 ❶：案號與出勤時段
-        frame_step1 = ttk.LabelFrame(self, text="【步驟 ❶：案號與出勤時段】", padding=8)
+        frame_step1 = ttk.LabelFrame(self.content_frame, text="【步驟 ❶：案號與出勤時段】", padding=6)
         frame_step1.pack(fill="x", **pad)
         self.frame_step1 = frame_step1
 
@@ -751,7 +786,7 @@ class ArchiveTaskTab(ttk.Frame):
             init_has_third = self.app.config.get("last_has_third", False)
 
         # 2. 步驟 ❷：設備連線與出勤人員
-        frame_step2 = ttk.LabelFrame(self, text="【步驟 ❷：設備連線與出勤人員】", padding=8)
+        frame_step2 = ttk.LabelFrame(self.content_frame, text="【步驟 ❷：設備連線與出勤人員】", padding=6)
         frame_step2.pack(fill="x", **pad)
         self.frame_step2 = frame_step2
 
@@ -832,35 +867,29 @@ class ArchiveTaskTab(ttk.Frame):
         ttk.Label(f_swap_line, text="↳ (單鍵互換或輪替順移)", foreground="#666666", font=('Helvetica', 9)).pack(side="left", padx=2)
 
         # 3. 步驟 ❸：開始比對並自動複製 (移至路徑設定上方)
-        frame_step3 = ttk.LabelFrame(self, text="【步驟 ❸：開始比對並自動複製】", padding=8)
+        frame_step3 = ttk.LabelFrame(self.content_frame, text="【步驟 ❸：開始比對並自動複製】", padding=6)
         frame_step3.pack(fill="x", **pad)
         self.frame_step3 = frame_step3
 
         f_btns = ttk.Frame(frame_step3)
-        f_btns.pack(fill="x", pady=(2, 4))
+        f_btns.pack(fill="x", pady=(2, 3))
 
         self.btn_start = ttk.Button(f_btns, text="🚀 開始比對時段並自動複製", command=self.start_process, style="Action.TButton")
-        self.btn_start.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 4))
+        self.btn_start.pack(side="left", fill="x", expand=True, ipady=4, padx=(0, 4))
 
         self.btn_pause = ttk.Button(f_btns, text="⛔ 暫停並放棄 (刪除已複製檔案)", command=self.pause_and_cleanup, state="disabled")
-        self.btn_pause.pack(side="right", ipady=6, padx=(4, 0))
+        self.btn_pause.pack(side="right", ipady=4, padx=(4, 0))
 
         self.progress_bar = ttk.Progressbar(frame_step3, orient="horizontal", mode="determinate")
-        self.progress_bar.pack(fill="x", pady=(4, 3))
+        self.progress_bar.pack(fill="x", pady=2)
 
         self.lbl_status = ttk.Label(frame_step3, text="狀態：準備就緒", foreground="#0066CC", font=('Helvetica', 9, 'bold'))
         self.lbl_status.pack(anchor="w")
 
-        # 4. 常設路徑：行車紀錄器 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
-        frame_dashcam = ttk.LabelFrame(self, text="【常設路徑：行車紀錄器】(平時鎖定免更動)", padding=8)
+        # 4. 基本設定：行車紀錄器 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
+        frame_dashcam = ttk.LabelFrame(self.content_frame, text="【基本設定：行車紀錄器】", padding=6)
         frame_dashcam.pack(fill="x", **pad)
         self.frame_dashcam = frame_dashcam
-
-        f_dash_header = ttk.Frame(frame_dashcam)
-        f_dash_header.pack(fill="x", pady=(0, 2))
-        ttk.Label(f_dash_header, text="常設存放與來源路徑 (平時鎖定，防止誤觸)", foreground="#666666", font=('Helvetica', 9)).pack(side="left")
-        self.btn_lock_dashcam = ttk.Button(f_dash_header, text="🔒 鎖定", command=self.toggle_lock_dashcam, width=8)
-        self.btn_lock_dashcam.pack(side="right")
 
         f_dash_target = ttk.Frame(frame_dashcam)
         f_dash_target.pack(fill="x", pady=2)
@@ -870,6 +899,8 @@ class ArchiveTaskTab(ttk.Frame):
         self.entry_dashcam_target.pack(side="left", padx=4)
         self.btn_dash_target = ttk.Button(f_dash_target, text="變更目錄", command=lambda: self.browse_path(self.entry_dashcam_target, "選擇行車紀錄器存放目錄"))
         self.btn_dash_target.pack(side="left")
+        self.btn_lock_dashcam = ttk.Button(f_dash_target, text="🔒 鎖定", command=self.toggle_lock_dashcam, width=8)
+        self.btn_lock_dashcam.pack(side="right")
 
         f_dash_src = ttk.Frame(frame_dashcam)
         f_dash_src.pack(fill="x", pady=2)
@@ -882,16 +913,10 @@ class ArchiveTaskTab(ttk.Frame):
         self.btn_browse_dash = ttk.Button(f_dash_src, text="瀏覽...", command=lambda: self.browse_path(self.entry_dashcam_src, "選擇行車紀錄器來源隨身碟"))
         self.btn_browse_dash.pack(side="left", padx=2)
 
-        # 5. 常設路徑：密錄器 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
-        frame_bodycam = ttk.LabelFrame(self, text="【常設路徑：密錄器】(平時鎖定免更動)", padding=8)
+        # 5. 基本設定：密錄器 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
+        frame_bodycam = ttk.LabelFrame(self.content_frame, text="【基本設定：密錄器】", padding=6)
         frame_bodycam.pack(fill="x", **pad)
         self.frame_bodycam = frame_bodycam
-
-        f_body_header = ttk.Frame(frame_bodycam)
-        f_body_header.pack(fill="x", pady=(0, 2))
-        ttk.Label(f_body_header, text="常設存放與來源路徑 (平時鎖定，防止誤觸)", foreground="#666666", font=('Helvetica', 9)).pack(side="left")
-        self.btn_lock_bodycam = ttk.Button(f_body_header, text="🔒 鎖定", command=self.toggle_lock_bodycam, width=8)
-        self.btn_lock_bodycam.pack(side="right")
 
         f_body_target = ttk.Frame(frame_bodycam)
         f_body_target.pack(fill="x", pady=2)
@@ -901,6 +926,8 @@ class ArchiveTaskTab(ttk.Frame):
         self.entry_bodycam_target.pack(side="left", padx=4)
         self.btn_body_target = ttk.Button(f_body_target, text="變更目錄", command=lambda: self.browse_path(self.entry_bodycam_target, "選擇密錄器存放目錄"))
         self.btn_body_target.pack(side="left")
+        self.btn_lock_bodycam = ttk.Button(f_body_target, text="🔒 鎖定", command=self.toggle_lock_bodycam, width=8)
+        self.btn_lock_bodycam.pack(side="right")
 
         f_b1 = ttk.Frame(frame_bodycam)
         f_b1.pack(fill="x", pady=2)
@@ -937,7 +964,7 @@ class ArchiveTaskTab(ttk.Frame):
         self.btn_browse_b3.pack(side="left", padx=2)
 
         # 5. 詳細紀錄視窗
-        frame_log = ttk.LabelFrame(self, text="【傳輸紀錄】", padding=4)
+        frame_log = ttk.LabelFrame(self.content_frame, text="【傳輸紀錄】", padding=4)
         frame_log.pack(fill="both", expand=True, **pad)
 
         self.txt_log = tk.Text(
@@ -2630,8 +2657,8 @@ class VideoBackupApp:
     def __init__(self, root):
         self.root = root
         self.root.title("救護影像抓取小幫手 v3.9")
-        self.root.geometry("730x860")
-        self.root.minsize(720, 800)
+        self.root.geometry("750x920")
+        self.root.minsize(720, 680)
 
         self.bg_color = "#F5F5F7"
         self.root.configure(bg=self.bg_color)
@@ -2653,7 +2680,7 @@ class VideoBackupApp:
         self.create_widgets()
         self.update_comboboxes_all_tabs()
         self.root.update_idletasks()
-        self.root.resizable(False, False)
+        self.root.resizable(True, True)
         self.root.protocol("WM_DELETE_WINDOW", self.on_app_close)
 
         # 🚀 啟動性能優化：非同步延遲 150ms 載入勤務表，讓視窗秒開，不卡主執行緒
