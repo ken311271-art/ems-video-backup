@@ -21,6 +21,7 @@ if getattr(sys, 'frozen', False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
+APP_TITLE = "救護影像抓取小幫手 v4.2"
 CONFIG_FILE = os.path.join(APP_DIR, "backup_config.json")
 
 # 消防分隊同仁名冊預設清單（供下拉選單與字元自動過濾，讀取勤務表後自動更新為實際同仁名冊）
@@ -894,7 +895,7 @@ class ArchiveTaskTab(ttk.Frame):
         self.lbl_status.pack(anchor="w")
 
         # 4. 基本設定大區域 (行車紀錄器、密錄器，支援隱藏/展開)
-        frame_base_settings = ttk.LabelFrame(self.content_frame, padding=6)
+        frame_base_settings = ttk.LabelFrame(self.content_frame, text="【基本常設設定：行車紀錄器 ＆ 密錄器】", padding=6)
         frame_base_settings.pack(fill="x", **pad)
         self.frame_base_settings = frame_base_settings
 
@@ -903,9 +904,9 @@ class ArchiveTaskTab(ttk.Frame):
 
         ttk.Label(
             f_base_header,
-            text="【基本常設設定：行車紀錄器 ＆ 密錄器路徑】",
-            font=('Helvetica', 9, 'bold'),
-            foreground="#333333"
+            text="存放目錄與隨身碟來源路徑設定：",
+            font=('Helvetica', 9),
+            foreground="#555555"
         ).pack(side="left")
 
         # 讀取使用者折疊偏好（預設為展開 False，使用者點擊後記住狀態）
@@ -913,9 +914,9 @@ class ArchiveTaskTab(ttk.Frame):
 
         self.btn_toggle_base = ttk.Button(
             f_base_header,
-            text="🔼 隱藏此區域" if not self.is_base_settings_hidden else "🔽 展開此區域",
+            text="🔼 隱藏此區域 (路徑設定)" if not self.is_base_settings_hidden else "🔽 展開此區域 (路徑設定)",
             command=self.toggle_base_settings,
-            width=12
+            width=18
         )
         self.btn_toggle_base.pack(side="right")
 
@@ -1460,13 +1461,13 @@ class ArchiveTaskTab(ttk.Frame):
         if getattr(self, "is_base_settings_hidden", False):
             # 目前為隱藏狀態 -> 展開
             self.f_base_content.pack(fill="x", pady=(2, 0))
-            self.btn_toggle_base.config(text="🔼 隱藏此區域")
+            self.btn_toggle_base.config(text="🔼 隱藏此區域 (路徑設定)")
             self.is_base_settings_hidden = False
             self.log("👁️ [基本設定] 區域已展開顯示。")
         else:
             # 目前為展開狀態 -> 隱藏
             self.f_base_content.pack_forget()
-            self.btn_toggle_base.config(text="🔽 展開此區域")
+            self.btn_toggle_base.config(text="🔽 展開此區域 (路徑設定)")
             self.is_base_settings_hidden = True
             self.log("🙈 [基本設定] 區域已收合隱藏。")
 
@@ -1480,10 +1481,10 @@ class ArchiveTaskTab(ttk.Frame):
                 tab.is_base_settings_hidden = self.is_base_settings_hidden
                 if self.is_base_settings_hidden:
                     tab.f_base_content.pack_forget()
-                    tab.btn_toggle_base.config(text="🔽 展開此區域")
+                    tab.btn_toggle_base.config(text="🔽 展開此區域 (路徑設定)")
                 else:
                     tab.f_base_content.pack(fill="x", pady=(2, 0))
-                    tab.btn_toggle_base.config(text="🔼 隱藏此區域")
+                    tab.btn_toggle_base.config(text="🔼 隱藏此區域 (路徑設定)")
                 try:
                     tab.content_frame.update_idletasks()
                     tab.canvas.configure(scrollregion=tab.canvas.bbox("all"))
@@ -2853,7 +2854,7 @@ def check_single_instance():
                 if hwnd:
                     user32.PostMessageW(hwnd, WM_ACTIVATE_INSTANCE, 0, 0)
                 else:
-                    hwnd_main = user32.FindWindowW(None, "救護影像抓取小幫手 v4.0")
+                    hwnd_main = user32.FindWindowW(None, APP_TITLE) or user32.FindWindowW(None, "救護影像抓取小幫手 v4.0")
                     if hwnd_main:
                         user32.ShowWindow(hwnd_main, 9)
                         user32.SetForegroundWindow(hwnd_main)
@@ -3298,7 +3299,7 @@ class VideoBackupApp:
         global _GLOBAL_APP_REF
         _GLOBAL_APP_REF = self
         self.root = root
-        self.root.title("救護影像抓取小幫手 v4.0")
+        self.root.title(APP_TITLE)
         self.root.geometry("750x920")
         self.root.minsize(720, 680)
 
@@ -3403,7 +3404,7 @@ class VideoBackupApp:
                 try:
                     import ctypes
                     user32 = ctypes.windll.user32
-                    hwnd_main = user32.FindWindowW(None, "救護影像抓取小幫手 v4.0")
+                    hwnd_main = user32.FindWindowW(None, APP_TITLE) or user32.FindWindowW(None, "救護影像抓取小幫手 v4.0")
                     if hwnd_main:
                         user32.ShowWindow(hwnd_main, 9)
                         user32.SetForegroundWindow(hwnd_main)
