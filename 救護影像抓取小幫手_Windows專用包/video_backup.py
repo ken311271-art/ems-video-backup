@@ -2104,8 +2104,9 @@ class ArchiveTaskTab(ttk.Frame):
         dlg.title(f"📋 複製前設備與影片確認 - 案件【{case_no}】")
         dlg.geometry("600x540")
         dlg.resizable(False, False)
-        dlg.transient(self.app.root)
-        dlg.grab_set()
+        if not getattr(self.app, 'is_minimized_to_tray', False):
+            dlg.transient(self.app.root)
+            dlg.grab_set()
 
         dlg.update_idletasks()
         x = self.app.root.winfo_x() + (self.app.root.winfo_width() - 600) // 2
@@ -2566,6 +2567,14 @@ class ArchiveTaskTab(ttk.Frame):
             self.log(f"✅ 成功！全數設備複製程序已完整結束。")
             self.active_created_folders = []
 
+            # 若視窗目前處於最小化至系統匣狀態，彈出 Windows 氣球通知提醒出勤同仁
+            if getattr(self.app, 'is_minimized_to_tray', False):
+                if hasattr(self.app, 'tray_manager') and self.app.tray_manager:
+                    self.app.tray_manager.show_balloon(
+                        "🎉【備份完成】救護影像抓取小幫手",
+                        f"案件【{case_no}】出勤影像已全數複製完成！共寫入 {total_all_done} 部影片，點擊右下角圖示即可查看成果。"
+                    )
+
             self.safe_root_after(0, lambda: self.show_completion_dialog(
                 case_no, today_mmdd, device_copied_counts, opened_folders, precheck_results, empty_folder_reasons
             ))
@@ -2698,10 +2707,298 @@ class ArchiveTaskTab(ttk.Frame):
         messagebox.showinfo("已暫停並清除", "複製作業已成功暫停！\n本次已建立之資料夾與未完成檔案已全數刪除還原。")
 
 
+# ==============================================================================
+# Windows 系統專屬：系統匣 (通知區域 / 右下角) 圖示管理模組 (純 Win32 API / ctypes 實作)
+# ==============================================================================
+class WindowsTrayManager:
+    """Windows 系統匣（右下角通知區域）圖示管理器
+    使用純 Windows API (ctypes) 實作，無需安裝任何第三方套件 (如 pystray/PIL)。
+    提供：
+    - 最小化自動隱藏工作列並常駐至右下角系統匣 (通知區域)
+    - 點擊或雙擊右下角圖示即時還原主視窗
+    - 滑鼠右鍵選單 (「🖥️ 開啟主視窗」、「❌ 結束程式」)
+    - 支援 Windows 氣球/吐司通知 (Balloon/Toast Notification)
+    - 監聽 TaskbarCreated 訊息，在檔案總管重新啟動時自動恢復圖示
+    - 程式結束時自動呼叫 NIM_DELETE 徹底清理圖示，不留殘影
+    """
+    def __init__(self, app):
+        self.app = app
+        self.root = app.root
+        self.hwnd = None
+        self.hicon = None
+        self.is_icon_visible = False
+        self.wnd_proc_ref = None
+        self.class_name = f"EMSBackupTray_{os.getpid()}"
+        self.wm_taskbar_created = 0
+        if sys.platform == "win32":
+            self._setup_window()
+
+    def _setup_window(self):
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+
+            LRESULT = ctypes.c_ssize_t
+            WINFUNCTYPE = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
+            WNDPROC = WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+
+            self.wnd_proc_ref = WNDPROC(self._wnd_proc)
+
+            hinstance = kernel32.GetModuleHandleW(None)
+
+            class WNDCLASSW(ctypes.Structure):
+                _fields_ = [
+                    ("style", wintypes.UINT),
+                    ("lpfnWndProc", WNDPROC),
+                    ("cbClsExtra", ctypes.c_int),
+                    ("cbWndExtra", ctypes.c_int),
+                    ("hInstance", wintypes.HINSTANCE),
+                    ("hIcon", wintypes.HICON),
+                    ("hCursor", wintypes.HICON),
+                    ("hbrBackground", wintypes.HBRUSH),
+                    ("lpszMenuName", wintypes.LPCWSTR),
+                    ("lpszClassName", wintypes.LPCWSTR),
+                ]
+
+            wc = WNDCLASSW()
+            wc.style = 0
+            wc.lpfnWndProc = self.wnd_proc_ref
+            wc.hInstance = hinstance
+            wc.lpszClassName = self.class_name
+
+            user32.RegisterClassW(ctypes.byref(wc))
+
+            HWND_MESSAGE = wintypes.HWND(-3)
+            self.hwnd = user32.CreateWindowExW(
+                0, self.class_name, "EMSBackupTrayMsgWnd", 0,
+                0, 0, 0, 0, HWND_MESSAGE, None, hinstance, None
+            )
+
+            self.wm_taskbar_created = user32.RegisterWindowMessageW("TaskbarCreated")
+            self.hicon = self._load_icon()
+        except Exception as e:
+            print(f"[WindowsTrayManager] 建立訊息視窗失敗: {e}")
+            self.hwnd = None
+
+    def _load_icon(self):
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            shell32 = ctypes.windll.shell32
+            kernel32 = ctypes.windll.kernel32
+            hinstance = kernel32.GetModuleHandleW(None)
+
+            # 1. 優先載入同目錄下的 app.ico
+            for ico_name in ("app.ico", "icon.ico", "favicon.ico"):
+                ico_path = os.path.join(APP_DIR, ico_name)
+                if os.path.exists(ico_path):
+                    try:
+                        h = user32.LoadImageW(
+                            None, ico_path, 1, 16, 16, 0x00000010 | 0x00008000
+                        )
+                        if h:
+                            return h
+                    except Exception:
+                        pass
+
+            # 2. 若為 PyInstaller 打包的 EXE，嘗試從自身執行檔提取圖示
+            if getattr(sys, "frozen", False):
+                try:
+                    h = shell32.ExtractIconW(hinstance, sys.executable, 0)
+                    if h and int(ctypes.cast(h, ctypes.c_void_p).value or 0) > 1:
+                        return h
+                except Exception:
+                    pass
+
+            # 3. 預設系統應用程式圖示 (IDI_APPLICATION: 32512)
+            return user32.LoadIconW(None, 32512)
+        except Exception:
+            return None
+
+    def _wnd_proc(self, hwnd, msg, wparam, lparam):
+        import ctypes
+        user32 = ctypes.windll.user32
+
+        WM_USER = 0x0400
+        WM_TRAYICON = WM_USER + 20
+        WM_LBUTTONUP = 0x0202
+        WM_LBUTTONDBLCLK = 0x0203
+        WM_RBUTTONUP = 0x0205
+        WM_CONTEXTMENU = 0x007B
+
+        if msg == WM_TRAYICON:
+            if lparam in (WM_LBUTTONUP, WM_LBUTTONDBLCLK):
+                self.root.after(0, self.app.restore_from_tray)
+                return 0
+            elif lparam in (WM_RBUTTONUP, WM_CONTEXTMENU):
+                self._show_context_menu()
+                return 0
+        elif self.wm_taskbar_created and msg == self.wm_taskbar_created:
+            if self.is_icon_visible:
+                self.show_tray_icon()
+            return 0
+        elif msg == 0x0010: # WM_CLOSE
+            self.destroy()
+            return 0
+
+        return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+    def _show_context_menu(self):
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+
+            POINT = wintypes.POINT
+            pt = POINT()
+            user32.GetCursorPos(ctypes.byref(pt))
+
+            hMenu = user32.CreatePopupMenu()
+            ID_RESTORE = 1001
+            ID_EXIT = 1002
+            MF_STRING = 0x0000
+            MF_SEPARATOR = 0x0800
+            TPM_RIGHTBUTTON = 0x0002
+            TPM_RETURNCMD = 0x0100
+
+            user32.AppendMenuW(hMenu, MF_STRING, ID_RESTORE, "🖥️ 開啟主視窗")
+            user32.AppendMenuW(hMenu, MF_SEPARATOR, 0, None)
+            user32.AppendMenuW(hMenu, MF_STRING, ID_EXIT, "❌ 結束程式")
+
+            user32.SetForegroundWindow(self.hwnd)
+
+            cmd = user32.TrackPopupMenuEx(
+                hMenu,
+                TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                pt.x,
+                pt.y,
+                self.hwnd,
+                None
+            )
+            user32.PostMessageW(self.hwnd, 0, 0, 0)
+            user32.DestroyMenu(hMenu)
+
+            if cmd == ID_RESTORE:
+                self.root.after(0, self.app.restore_from_tray)
+            elif cmd == ID_EXIT:
+                self.root.after(0, self.app.on_app_close)
+        except Exception as e:
+            print(f"[WindowsTrayManager] 彈出選單異常: {e}")
+
+    def _create_nid(self, flags=None):
+        import ctypes
+        from ctypes import wintypes
+
+        class NOTIFYICONDATAW(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("hWnd", wintypes.HWND),
+                ("uID", wintypes.UINT),
+                ("uFlags", wintypes.UINT),
+                ("uCallbackMessage", wintypes.UINT),
+                ("hIcon", wintypes.HICON),
+                ("szTip", wintypes.WCHAR * 128),
+                ("dwState", wintypes.DWORD),
+                ("dwStateMask", wintypes.DWORD),
+                ("szInfo", wintypes.WCHAR * 256),
+                ("uTimeoutOrVersion", wintypes.UINT),
+                ("szInfoTitle", wintypes.WCHAR * 64),
+                ("dwInfoFlags", wintypes.DWORD),
+                ("guidItem", ctypes.c_byte * 16),
+                ("hBalloonIcon", wintypes.HICON),
+            ]
+
+        NIF_MESSAGE = 0x00000001
+        NIF_ICON = 0x00000002
+        NIF_TIP = 0x00000004
+        WM_USER = 0x0400
+        WM_TRAYICON = WM_USER + 20
+
+        nid = NOTIFYICONDATAW()
+        nid.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
+        nid.hWnd = self.hwnd
+        nid.uID = 1001
+        nid.uFlags = flags if flags is not None else (NIF_MESSAGE | NIF_ICON | NIF_TIP)
+        nid.uCallbackMessage = WM_TRAYICON
+        nid.hIcon = self.hicon
+        tip = "救護影像抓取小幫手 (點擊還原視窗)"
+        nid.szTip = tip[:127]
+        return nid
+
+    def show_tray_icon(self, balloon_title=None, balloon_msg=None):
+        if not self.hwnd:
+            return
+        try:
+            import ctypes
+            shell32 = ctypes.windll.shell32
+            NIM_ADD = 0x00000000
+            NIM_MODIFY = 0x00000001
+            NIF_MESSAGE = 0x00000001
+            NIF_ICON = 0x00000002
+            NIF_TIP = 0x00000004
+            NIF_INFO = 0x00000010
+            NIIF_INFO = 0x00000001
+
+            flags = NIF_MESSAGE | NIF_ICON | NIF_TIP
+            if balloon_msg:
+                flags |= NIF_INFO
+
+            nid = self._create_nid(flags=flags)
+            if balloon_msg:
+                nid.szInfo = str(balloon_msg)[:255]
+                nid.szInfoTitle = str(balloon_title or "救護影像抓取小幫手")[:63]
+                nid.dwInfoFlags = NIIF_INFO
+
+            if not self.is_icon_visible:
+                res = shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid))
+                if not res:
+                    nid.cbSize = 504 if ctypes.sizeof(ctypes.c_void_p) == 8 else 488
+                    res = shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid))
+                self.is_icon_visible = True
+            else:
+                shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid))
+        except Exception as e:
+            print(f"[WindowsTrayManager] 顯示系統匣圖示失敗: {e}")
+
+    def hide_tray_icon(self):
+        if not self.hwnd or not self.is_icon_visible:
+            return
+        try:
+            import ctypes
+            shell32 = ctypes.windll.shell32
+            NIM_DELETE = 0x00000002
+            nid = self._create_nid()
+            shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(nid))
+            self.is_icon_visible = False
+        except Exception as e:
+            print(f"[WindowsTrayManager] 移除系統匣圖示失敗: {e}")
+
+    def show_balloon(self, title, message):
+        if not self.hwnd:
+            return
+        self.show_tray_icon(balloon_title=title, balloon_msg=message)
+
+    def destroy(self):
+        self.hide_tray_icon()
+        if self.hwnd:
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                kernel32 = ctypes.windll.kernel32
+                user32.DestroyWindow(self.hwnd)
+                user32.UnregisterClassW(self.class_name, kernel32.GetModuleHandleW(None))
+            except Exception:
+                pass
+            self.hwnd = None
+
+
 class VideoBackupApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("救護影像抓取小幫手 v3.9")
+        self.root.title("救護影像抓取小幫手 v4.0")
         self.root.geometry("750x920")
         self.root.minsize(720, 680)
 
@@ -2728,11 +3025,127 @@ class VideoBackupApp:
         self.root.resizable(True, True)
         self.root.protocol("WM_DELETE_WINDOW", self.on_app_close)
 
+        # Windows 專屬：右下角系統匣最小化與圖示管理
+        self.is_minimized_to_tray = False
+        self.last_window_state = "normal"
+        self._shown_first_tray_balloon = False
+
+        if sys.platform == "win32":
+            ico_path = os.path.join(APP_DIR, "app.ico")
+            if os.path.exists(ico_path):
+                try:
+                    self.root.iconbitmap(ico_path)
+                except Exception:
+                    pass
+
+            self.tray_manager = WindowsTrayManager(self)
+            self.root.bind("<Unmap>", self.on_window_unmap)
+            self.root.bind("<Configure>", self.on_window_configure)
+
         # 🚀 啟動性能優化：非同步延遲 150ms 載入勤務表，讓視窗秒開，不卡主執行緒
         self.root.after(150, self.load_officer_names_from_roster)
 
+    def hide_to_tray(self):
+        """將視窗最小化隱藏至 Windows 右下角系統匣 (通知區域)"""
+        if getattr(self, "is_minimized_to_tray", False):
+            return
+        self.is_minimized_to_tray = True
+        self.root.withdraw()
+
+        if hasattr(self, 'tray_manager') and self.tray_manager:
+            first_time = getattr(self, '_shown_first_tray_balloon', False)
+            if not first_time:
+                self._shown_first_tray_balloon = True
+                self.tray_manager.show_tray_icon(
+                    balloon_title="救護影像抓取小幫手",
+                    balloon_msg="已自動縮小至右下角系統匣，點擊此圖示即可隨時還原視窗！"
+                )
+            else:
+                self.tray_manager.show_tray_icon()
+
+    def restore_from_tray(self):
+        """從 Windows 右下角系統匣還原主視窗"""
+        if not getattr(self, "is_minimized_to_tray", False):
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+            return
+
+        self.is_minimized_to_tray = False
+        if hasattr(self, 'tray_manager') and self.tray_manager:
+            self.tray_manager.hide_tray_icon()
+
+        self.root.deiconify()
+        target_state = getattr(self, "last_window_state", "normal")
+        if target_state not in ("normal", "zoomed"):
+            target_state = "normal"
+        self.root.state(target_state)
+        self.root.lift()
+        try:
+            self.root.attributes("-topmost", True)
+            self.root.attributes("-topmost", False)
+        except Exception:
+            pass
+        self.root.focus_force()
+
+        # 若有子視窗 (如歸檔完成對話框)，一併還原並置頂
+        for child in self.root.winfo_children():
+            if isinstance(child, tk.Toplevel) and child.state() != "withdrawn":
+                try:
+                    child.lift()
+                    child.grab_set()
+                except Exception:
+                    pass
+
+    def on_window_unmap(self, event):
+        """監聽視窗 Unmap (最小化) 事件"""
+        if sys.platform != "win32":
+            return
+        if event.widget != self.root:
+            return
+        if getattr(self, "is_minimized_to_tray", False):
+            return
+        # 延遲 25ms 讓 Windows 完成縮小動畫與狀態轉換
+        self.root.after(25, self._check_minimized)
+
+    def on_window_configure(self, event):
+        """監聽視窗配置改變，記憶還原時的視窗狀態 (一般或最大化)"""
+        if event.widget == self.root:
+            st = self.root.state()
+            if st in ("normal", "zoomed"):
+                self.last_window_state = st
+
+    def _check_minimized(self):
+        """檢查是否觸發最小化至系統匣"""
+        if sys.platform != "win32":
+            return
+        if getattr(self, "is_minimized_to_tray", False):
+            return
+        try:
+            st = self.root.state()
+            if st == "iconic":
+                if self.config.get("minimize_to_tray", True):
+                    self.hide_to_tray()
+        except Exception:
+            pass
+
     def on_app_close(self):
         """軟體關閉時自動儲存當前設定與任務同仁紀錄"""
+        active_copying = [t for t in self.task_tabs if getattr(t, 'is_copying', False)]
+        if active_copying:
+            if not messagebox.askyesno("確認關閉", "目前有備份任務正在複製檔案中！\n確定要強制結束程式並放棄進行中的備份嗎？"):
+                return
+            for t in active_copying:
+                try:
+                    t.stop_requested.set()
+                except Exception:
+                    pass
+
+        if hasattr(self, 'tray_manager') and self.tray_manager:
+            try:
+                self.tray_manager.destroy()
+            except Exception:
+                pass
         try:
             self.save_config()
         except:
@@ -2901,6 +3314,8 @@ class VideoBackupApp:
                 r_list = [line.strip() for line in raw_r.splitlines() if line.strip()]
                 if r_list:
                     self.config["missing_reasons"] = r_list
+            if hasattr(self, 'var_min_to_tray'):
+                self.config["minimize_to_tray"] = self.var_min_to_tray.get()
 
             # 2. 從當前活躍分頁或最後一個任務分頁抓取路徑設定與最新同仁姓名
             active_tab = None
@@ -3177,6 +3592,23 @@ class VideoBackupApp:
         self.txt_missing_reasons.pack(fill="x", pady=2)
         reasons_list = self.config.get("missing_reasons", DEFAULT_MISSING_REASONS)
         self.txt_missing_reasons.insert("1.0", "\n".join(reasons_list))
+
+        # Windows 專屬設定：最小化至右下角系統匣
+        if sys.platform == "win32":
+            frame_win = ttk.LabelFrame(parent, text="【Windows 系統設定】", padding=10)
+            frame_win.pack(fill="x", **pad)
+            self.var_min_to_tray = tk.BooleanVar(value=self.config.get("minimize_to_tray", True))
+            chk_tray = ttk.Checkbutton(
+                frame_win,
+                text="按視窗縮小（最小化）時，自動縮小至右下角通知區域 (系統匣)，避免佔用工作列",
+                variable=self.var_min_to_tray
+            )
+            chk_tray.pack(anchor="w", pady=2)
+            ttk.Label(
+                frame_win,
+                text="💡 縮小至右下角後，點擊右下角圖示即可隨時還原視窗；亦可對圖示按右鍵選擇功能。",
+                foreground="#555555"
+            ).pack(anchor="w", pady=(2, 0))
 
         frame_save_bar = ttk.Frame(parent)
         frame_save_bar.pack(fill="x", padx=12, pady=(6, 8))

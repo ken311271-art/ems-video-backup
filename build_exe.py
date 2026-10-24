@@ -26,12 +26,16 @@ else:
 print(f"\n正在將 video_backup.py 打包為 {mode_name}...")
 print("封裝中，大約需要 30~60 秒，請稍候...\n")
 
+icon_flags = []
+if os.path.exists("app.ico"):
+    icon_flags = ["--icon=app.ico", "--add-data", "app.ico;."]
+
 cmd = [
     sys.executable, "-m", "PyInstaller",
     "--noconfirm",
     "--windowed",
     "--name", "救護影像抓取小幫手",
-] + extra_flags + ["video_backup.py"]
+] + icon_flags + extra_flags + ["video_backup.py"]
 
 res = subprocess.run(cmd)
 
