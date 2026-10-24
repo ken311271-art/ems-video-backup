@@ -709,9 +709,10 @@ class ArchiveTaskTab(ttk.Frame):
         f_time_grid.pack(fill="x", padx=6, pady=2)
 
         now = datetime.now()
-        default_roc_year = str(now.year - 1911)
-        default_mmdd = now.strftime("%m%d")
-        default_start_4 = (now - timedelta(hours=1)).strftime("%H%M")
+        dispatch_ref = now - timedelta(hours=1)
+        default_roc_year = str(dispatch_ref.year - 1911)
+        default_mmdd = dispatch_ref.strftime("%m%d")
+        default_start_4 = dispatch_ref.strftime("%H%M")
         default_end_4 = ""
 
         # 第一行：年份（民國）（三碼）
@@ -2669,19 +2670,20 @@ class ArchiveTaskTab(ttk.Frame):
     def reset_case_fields(self):
         """使用者按確認後，該分頁的案號、出勤時間、返隊時間、出勤人員姓名皆恢復預設，並重新刷新連線狀態"""
         now = datetime.now()
+        dispatch_ref = now - timedelta(hours=1)
         self.entry_case_no.delete(0, tk.END)
         self.on_case_no_changed()
 
         if hasattr(self, 'entry_year'):
             self.entry_year.delete(0, tk.END)
-            self.entry_year.insert(0, str(now.year - 1911))
+            self.entry_year.insert(0, str(dispatch_ref.year - 1911))
 
         if hasattr(self, 'entry_month_day'):
             self.entry_month_day.delete(0, tk.END)
-            self.entry_month_day.insert(0, now.strftime("%m%d"))
+            self.entry_month_day.insert(0, dispatch_ref.strftime("%m%d"))
 
         self.entry_start_time.delete(0, tk.END)
-        self.entry_start_time.insert(0, (now - timedelta(hours=1)).strftime("%H%M"))
+        self.entry_start_time.insert(0, dispatch_ref.strftime("%H%M"))
 
         self.entry_end_time.delete(0, tk.END)
         self.entry_name1.delete(0, tk.END)
