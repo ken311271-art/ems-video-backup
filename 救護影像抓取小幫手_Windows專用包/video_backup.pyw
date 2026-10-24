@@ -2710,6 +2710,21 @@ class ArchiveTaskTab(ttk.Frame):
 
 
 _GLOBAL_APP_REF = None
+_GLOBAL_SINGLE_INSTANCE_HANDLE = None
+
+def release_single_instance_handle():
+    """釋放單一執行個體鎖定（供自動重啟更新前呼叫，避免新進程被誤判重複執行）"""
+    global _GLOBAL_SINGLE_INSTANCE_HANDLE
+    if _GLOBAL_SINGLE_INSTANCE_HANDLE:
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                ctypes.windll.kernel32.CloseHandle(_GLOBAL_SINGLE_INSTANCE_HANDLE)
+            else:
+                _GLOBAL_SINGLE_INSTANCE_HANDLE.close()
+        except Exception:
+            pass
+        _GLOBAL_SINGLE_INSTANCE_HANDLE = None
 
 def check_single_instance():
     """檢查是否已有相同程式執行中。
@@ -2718,6 +2733,7 @@ def check_single_instance():
     - Mac/Linux: 透過本機 Loopback Socket (45192) 通知現有實例喚醒並退出。
     若為第一個執行個體：正常啟動並保留常駐把手。
     """
+    global _GLOBAL_SINGLE_INSTANCE_HANDLE
     if sys.platform == "win32":
         try:
             import ctypes
@@ -2772,6 +2788,7 @@ def check_single_instance():
 
                 sys.exit(0)
 
+            _GLOBAL_SINGLE_INSTANCE_HANDLE = mutex
             return mutex
         except Exception as e:
             print(f"[SingleInstance] Windows 檢查失敗: {e}")
@@ -2800,6 +2817,7 @@ def check_single_instance():
 
                 t = threading.Thread(target=_listen_worker, daemon=True)
                 t.start()
+                _GLOBAL_SINGLE_INSTANCE_HANDLE = s
                 return s
             except socket.error:
                 try:
@@ -3255,6 +3273,8 @@ class VideoBackupApp:
 
         # 🚀 啟動性能優化：非同步延遲 150ms 載入勤務表，讓視窗秒開，不卡主執行緒
         self.root.after(150, self.load_officer_names_from_roster)
+        # 🚀 自動更新檢查：非同步延遲 1200ms 檢查指定資料夾是否有新版本檔案
+        self.root.after(1200, self.auto_check_update_on_startup)
 
     def hide_to_tray(self):
         """將視窗最小化隱藏至 Windows 右下角系統匣 (通知區域)"""
@@ -3580,7 +3600,8 @@ class VideoBackupApp:
             "label_bodycam1": "BODYCAM1",
             "label_bodycam2": "BODYCAM2",
             "label_bodycam3": "BODYCAM3",
-            "roster_path": ""
+            "roster_path": "",
+            "update_dir": ""
         }
         if os.path.exists(CONFIG_FILE):
             try:
@@ -3595,6 +3616,8 @@ class VideoBackupApp:
             # 1. 從設定分頁抓取最新設定 (含勤務表路徑與設備硬碟標籤)
             if hasattr(self, 'entry_roster_path'):
                 self.config["roster_path"] = self.entry_roster_path.get().strip()
+            if hasattr(self, 'entry_update_dir'):
+                self.config["update_dir"] = self.entry_update_dir.get().strip()
             if hasattr(self, 'entry_label_dashcam'):
                 self.config["label_dashcam"] = self.entry_label_dashcam.get().strip()
                 self.config["label_bodycam1"] = self.entry_label_b1.get().strip()
@@ -3873,6 +3896,26 @@ class VideoBackupApp:
         self.entry_label_b3.pack(side="left", padx=4)
         ttk.Label(f_s4, text="例: BODYCAM3 或 CAM3", foreground="#666666").pack(side="left", padx=4)
 
+        # 需求：軟體自動更新來源資料夾設定
+        frame_update = ttk.LabelFrame(parent, text="【軟體自動更新設定】(放置新版檔案即可全自動偵測升級)", padding=10)
+        frame_update.pack(fill="x", **pad)
+
+        f_u_line = ttk.Frame(frame_update)
+        f_u_line.pack(fill="x", pady=3)
+        ttk.Label(f_u_line, text="更新來源資料夾：", width=18).pack(side="left")
+        self.entry_update_dir = ttk.Entry(f_u_line, width=28)
+        self.entry_update_dir.insert(0, self.config.get("update_dir", ""))
+        self.entry_update_dir.pack(side="left", padx=4)
+        ttk.Button(f_u_line, text="📁 選擇資料夾", command=self.browse_update_dir).pack(side="left", padx=2)
+        ttk.Button(f_u_line, text="🔄 立即檢查更新", command=lambda: self.check_and_apply_update(manual=True)).pack(side="left", padx=2)
+
+        ttk.Label(
+            frame_update,
+            text="💡 提示：可指定為隨身碟、分隊 NAS 共用槽或個人「下載」資料夾。\n"
+                 "只要將最新檔案（video_backup.pyw、video_backup (1).pyw、或小幫手專用包 .zip）放入該目錄，程式每次啟動時會自動比對並提示升級！",
+            foreground="#555555"
+        ).pack(anchor="w", pady=(2, 0))
+
         # 需求 1: 「💾 儲存所有設定」獨立移至所有設定下方，明確涵蓋當月勤務表路徑與設備標籤名稱
                 # 需求：未錄影空資料夾備註原因自訂清單
         frame_reasons = ttk.LabelFrame(parent, text="【未錄影空資料夾備註原因設定】(每行一筆，供預檢視窗 0 部影片時秒選)", padding=10)
@@ -3906,7 +3949,7 @@ class VideoBackupApp:
 
         self.btn_save_cfg = ttk.Button(
             frame_save_bar,
-            text="💾 儲存所有設定 (含當月勤務表路徑、設備硬碟標籤與未錄影原因)",
+            text="💾 儲存所有設定 (含更新資料夾、勤務表路徑、設備標籤與原因)",
             command=self.save_settings_clicked
         )
         self.btn_save_cfg.pack(side="left", ipady=3)
@@ -4034,6 +4077,212 @@ class VideoBackupApp:
         except Exception as e:
             messagebox.showerror("測試解析失敗", f"解析檔案【{os.path.basename(target_file)}】時發生錯誤：\n{e}")
 
+    def browse_update_dir(self):
+        """提供選取存放更新檔之資料夾"""
+        dir_selected = filedialog.askdirectory(title="選取存放更新檔之資料夾 (可為隨身碟、NAS共用槽或下載資料夾)")
+        if dir_selected:
+            self.entry_update_dir.delete(0, tk.END)
+            self.entry_update_dir.insert(0, dir_selected)
+            self.save_config()
+            self.check_and_apply_update(manual=True)
+
+    def auto_check_update_on_startup(self):
+        """程式啟動後背景延遲檢查是否有新版本更新"""
+        try:
+            self.check_and_apply_update(manual=False)
+        except Exception as e:
+            print(f"[AutoUpdate] 啟動檢查異常: {e}")
+
+    def check_and_apply_update(self, manual=False):
+        """檢查自動更新來源資料夾，並執行版本比對與自動更新替換"""
+        import hashlib, zipfile, shutil
+
+        update_dir = self.config.get("update_dir", "").strip()
+        if hasattr(self, 'entry_update_dir'):
+            entered = self.entry_update_dir.get().strip()
+            if entered:
+                update_dir = entered
+
+        if not update_dir:
+            if manual:
+                messagebox.showwarning("路徑未設定", "請先點擊【📁 選擇資料夾】指定自動更新來源資料夾！")
+            return
+
+        if not os.path.exists(update_dir) or not os.path.isdir(update_dir):
+            if manual:
+                messagebox.showerror("路徑無效", f"指定的更新資料夾不存在或無法存取：\n{update_dir}")
+            return
+
+        # 取得目前運行的主腳本檔案路徑
+        current_script = None
+        for cand in [os.path.join(APP_DIR, "video_backup.pyw"), os.path.join(APP_DIR, "video_backup.py"), sys.argv[0]]:
+            if cand and os.path.isfile(cand):
+                current_script = os.path.abspath(cand)
+                break
+
+        if not current_script or not os.path.isfile(current_script):
+            if manual:
+                messagebox.showwarning("更新提示", "未能定位目前運行的腳本主程式檔案，無法執行自動替換。")
+            return
+
+        def get_bytes_md5(data_bytes):
+            return hashlib.md5(data_bytes).hexdigest()
+
+        try:
+            with open(current_script, "rb") as f:
+                current_bytes = f.read()
+            current_md5 = get_bytes_md5(current_bytes)
+            current_mtime = os.path.getmtime(current_script)
+        except Exception as e:
+            if manual:
+                messagebox.showerror("讀取失敗", f"讀取目前程式檔案時發生錯誤：\n{e}")
+            return
+
+        # 搜尋更新資料夾中符合條件的檔案：
+        # 1. 獨立 Python 檔：video_backup*.pyw 或 video_backup*.py
+        # 2. ZIP 壓縮包：內含 video_backup.pyw 或 video_backup.py
+        candidates = []
+        try:
+            for fname in os.listdir(update_dir):
+                if fname.startswith('~$') or fname.endswith(('.bak', '.tmp')):
+                    continue
+                full_p = os.path.join(update_dir, fname)
+                if not os.path.isfile(full_p):
+                    continue
+                # 排除自身
+                if os.path.abspath(full_p) == current_script:
+                    continue
+
+                lower_name = fname.lower()
+                # 模式 A: 獨立 Python 檔案
+                if (lower_name.startswith("video_backup") or "小幫手" in lower_name) and (lower_name.endswith(".pyw") or lower_name.endswith(".py")):
+                    try:
+                        mtime = os.path.getmtime(full_p)
+                        size = os.path.getsize(full_p)
+                        if size > 1000:
+                            candidates.append((mtime, full_p, fname, size, None))
+                    except Exception:
+                        pass
+                # 模式 B: ZIP 壓縮檔案
+                elif lower_name.endswith(".zip"):
+                    try:
+                        mtime = os.path.getmtime(full_p)
+                        size = os.path.getsize(full_p)
+                        with zipfile.ZipFile(full_p, 'r') as zf:
+                            for zinfo in zf.infolist():
+                                z_base = os.path.basename(zinfo.filename).lower()
+                                if z_base in ("video_backup.pyw", "video_backup.py") and zinfo.file_size > 1000:
+                                    candidates.append((mtime, full_p, f"{fname} (內含 {z_base})", size, zinfo.filename))
+                                    break
+                    except Exception:
+                        pass
+        except Exception as e:
+            if manual:
+                messagebox.showerror("掃描失敗", f"掃描更新資料夾時發生錯誤：\n{e}")
+            return
+
+        if not candidates:
+            if manual:
+                messagebox.showinfo(
+                    "無更新檔",
+                    f"在更新資料夾【{update_dir}】中未發現任何可用之更新檔案。\n\n"
+                    f"💡 支援格式：\n"
+                    f"1. video_backup*.pyw 或 video_backup*.py（如 video_backup (1).pyw）\n"
+                    f"2. 包含程式之 .zip 壓縮包（如 救護影像抓取小幫手_Windows專用包.zip）"
+                )
+            return
+
+        # 依最後修改時間降冪排序，挑選最新的一個候選檔案
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        best_mtime, best_path, best_display_name, best_size, zip_subpath = candidates[0]
+
+        # 提取新版本的二進位內容與計算 MD5
+        try:
+            if zip_subpath:
+                with zipfile.ZipFile(best_path, 'r') as zf:
+                    new_bytes = zf.read(zip_subpath)
+            else:
+                with open(best_path, "rb") as f:
+                    new_bytes = f.read()
+            new_md5 = get_bytes_md5(new_bytes)
+        except Exception as e:
+            if manual:
+                messagebox.showerror("讀取失敗", f"讀取更新檔內容時發生錯誤：\n{e}")
+            return
+
+        # 若內容與目前運行中程式完全相同，代表已是最新版
+        if current_md5 == new_md5:
+            if manual:
+                messagebox.showinfo("已是最新版本", f"目前程式與更新檔【{best_display_name}】內容完全一致，已是最新版本！無需更新。")
+            return
+
+        # 若是自動檢查，但更新檔的修改時間比目前運行的檔案舊，則不自動打擾同仁
+        if not manual and best_mtime < current_mtime:
+            return
+
+        time_str = datetime.fromtimestamp(best_mtime).strftime("%Y/%m/%d %H:%M:%S")
+        prompt_msg = (
+            f"🎉 發現小幫手新版本程式！\n\n"
+            f"• 來源更新檔：【{best_display_name}】\n"
+            f"• 檔案大小：{len(new_bytes) // 1024} KB\n"
+            f"• 檔案時間：{time_str}\n\n"
+            f"是否立即套用此更新並重新啟動小幫手？\n"
+            f"（原本儲存之所有設定與路徑將 100% 完整保留）"
+        )
+
+        confirm = messagebox.askyesno("發現新版本更新", prompt_msg)
+        if not confirm:
+            return
+
+        # 執行安全備份與覆蓋
+        try:
+            backup_script = current_script + ".bak"
+            shutil.copy2(current_script, backup_script)
+
+            with open(current_script, "wb") as f:
+                f.write(new_bytes)
+
+            # 同步覆蓋同目錄下對應的 .py 或 .pyw 備份檔
+            for target_name in ["video_backup.pyw", "video_backup.py"]:
+                target_p = os.path.join(APP_DIR, target_name)
+                if os.path.isfile(target_p) and target_p != current_script:
+                    try:
+                        with open(target_p, "wb") as f:
+                            f.write(new_bytes)
+                    except Exception:
+                        pass
+
+            messagebox.showinfo(
+                "更新成功",
+                f"✅ 已成功升級至新版本！\n\n"
+                f"舊版本已安全備份為【{os.path.basename(backup_script)}】。\n"
+                f"點擊「確定」後，程式將立即為您自動重新啟動！"
+            )
+
+            # 釋放單一執行個體 Mutex / Socket 鎖定，確保重啟不會被擋
+            release_single_instance_handle()
+
+            # 清理右下角系統匣圖示
+            if hasattr(self, 'tray_manager') and self.tray_manager:
+                try:
+                    self.tray_manager.cleanup()
+                except Exception:
+                    pass
+
+            import subprocess, time
+            time.sleep(0.3)
+
+            vbs_launcher = os.path.join(APP_DIR, "啟動影像備份(無黑屏).vbs")
+            if sys.platform == "win32" and os.path.isfile(vbs_launcher):
+                os.startfile(vbs_launcher)
+            else:
+                subprocess.Popen([sys.executable, current_script] + sys.argv[1:])
+
+            self.root.destroy()
+            sys.exit(0)
+        except Exception as e:
+            messagebox.showerror("更新失敗", f"替換更新檔時發生錯誤：\n{e}\n\n請確認檔案未被防毒軟體鎖定，或以手動複製替換。")
+
     def refresh_disk_list(self):
         self.txt_disks.delete(1.0, tk.END)
         disks = get_all_connected_disks()
@@ -4063,6 +4312,7 @@ class VideoBackupApp:
 
         roster_p = self.config.get("roster_path", "")
         roster_name = os.path.basename(roster_p) if roster_p else "未指定"
+        update_p = self.config.get("update_dir", "")
         if hasattr(self, 'lbl_save_status'):
             self.lbl_save_status.config(
                 text=f"✅ 設定已儲存！(勤務表: {roster_name}，下拉選單與未錄影原因已同步更新)",
@@ -4072,6 +4322,7 @@ class VideoBackupApp:
         messagebox.showinfo(
             "設定成功",
             "✅ 所有設定已成功儲存！\n\n"
+            f"• 自動更新資料夾：{update_p if update_p else '（未指定）'}\n"
             f"• 當月勤務表目錄：{roster_p if roster_p else '（未指定）'}\n"
             "• 設備隨身碟標籤：已更新記憶 (Volume Label 雙重驗證)\n"
             "• 未錄影備註原因：已更新自訂清單\n"
