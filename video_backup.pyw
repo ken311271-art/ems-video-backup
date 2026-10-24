@@ -2722,13 +2722,20 @@ def _global_wnd_proc(hwnd, msg, wparam, lparam):
         if msg == WM_TRAYICON:
             # 取得低 16 位元事件代碼 (跨 32-bit / 64-bit Windows 與所有版本相容)
             evt = lparam & 0xFFFF
-            # 左鍵單擊 (0x0202)、左鍵雙擊 (0x0203)、左鍵按下 (0x0201)、V4 點擊 (0x0400/0x0402)、氣球通知點擊 (0x0405)
-            if evt in (0x0201, 0x0202, 0x0203, 0x0400, 0x0402, 0x0405):
+            # 僅捕捉使用者的主動點擊事件：
+            # 0x0202: WM_LBUTTONUP (左鍵放開)
+            # 0x0203: WM_LBUTTONDBLCLK (左鍵雙擊)
+            # 0x0400: NIN_SELECT (V4 滑鼠點擊選取或鍵盤 Space/Enter)
+            # 0x0401: NIN_KEYSELECT (V4 鍵盤選取)
+            # 0x0405: NIN_BALLOONUSERCLICK (使用者主動點擊氣球通知)
+            # ⚠️ 關鍵防護：絕不可包含 0x0402 (NIN_BALLOONSHOW)！因 Windows 彈出氣球通知瞬間會發送 0x0402，
+            # 若包含 0x0402 會導致第一次最小化時氣球剛顯示就被誤判為點擊而立即把視窗彈回桌面！
+            if evt in (0x0202, 0x0203, 0x0400, 0x0401, 0x0405):
                 if _GLOBAL_TRAY_MGR and _GLOBAL_TRAY_MGR.app:
                     _GLOBAL_TRAY_MGR.root.after(0, _GLOBAL_TRAY_MGR.app.restore_from_tray)
                 return 0
-            # 右鍵按下 (0x0204)、右鍵放開 (0x0205)、內容選單 (0x007B)
-            elif evt in (0x0204, 0x0205, 0x007B):
+            # 右鍵放開 (0x0205)、內容選單 (0x007B)
+            elif evt in (0x0205, 0x007B):
                 if _GLOBAL_TRAY_MGR:
                     _GLOBAL_TRAY_MGR._show_context_menu()
                 return 0
