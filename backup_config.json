@@ -49,5 +49,7 @@
   "label_bodycam2": "BODYCAM2",
   "label_bodycam3": "BODYCAM3",
   "roster_path": "",
+  "update_dir": "",
+  "hide_base_settings": false,
   "station_name": "消防分隊"
 }

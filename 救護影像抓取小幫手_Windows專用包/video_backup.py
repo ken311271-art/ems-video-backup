@@ -893,9 +893,40 @@ class ArchiveTaskTab(ttk.Frame):
         self.lbl_status = ttk.Label(frame_step3, text="狀態：準備就緒", foreground="#0066CC", font=('Helvetica', 9, 'bold'))
         self.lbl_status.pack(anchor="w")
 
-        # 4. 基本設定：行車紀錄器 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
-        frame_dashcam = ttk.LabelFrame(self.content_frame, text="【基本設定：行車紀錄器】", padding=6)
-        frame_dashcam.pack(fill="x", **pad)
+        # 4. 基本設定大區域 (行車紀錄器、密錄器，支援隱藏/展開)
+        frame_base_settings = ttk.LabelFrame(self.content_frame, padding=6)
+        frame_base_settings.pack(fill="x", **pad)
+        self.frame_base_settings = frame_base_settings
+
+        f_base_header = ttk.Frame(frame_base_settings)
+        f_base_header.pack(fill="x", pady=(1, 3))
+
+        ttk.Label(
+            f_base_header,
+            text="【基本常設設定：行車紀錄器 ＆ 密錄器路徑】",
+            font=('Helvetica', 9, 'bold'),
+            foreground="#333333"
+        ).pack(side="left")
+
+        # 讀取使用者折疊偏好（預設為展開 False，使用者點擊後記住狀態）
+        self.is_base_settings_hidden = self.app.config.get("hide_base_settings", False)
+
+        self.btn_toggle_base = ttk.Button(
+            f_base_header,
+            text="🔼 隱藏此區域" if not self.is_base_settings_hidden else "🔽 展開此區域",
+            command=self.toggle_base_settings,
+            width=12
+        )
+        self.btn_toggle_base.pack(side="right")
+
+        # 內部折疊容器 (包覆行車紀錄器與密錄器)
+        self.f_base_content = ttk.Frame(frame_base_settings)
+        if not self.is_base_settings_hidden:
+            self.f_base_content.pack(fill="x", pady=(2, 0))
+
+        # 4-1. 基本設定：行車紀錄器 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
+        frame_dashcam = ttk.LabelFrame(self.f_base_content, text="【行車紀錄器】", padding=6)
+        frame_dashcam.pack(fill="x", pady=(2, 4))
         self.frame_dashcam = frame_dashcam
 
         f_dash_target = ttk.Frame(frame_dashcam)
@@ -920,9 +951,9 @@ class ArchiveTaskTab(ttk.Frame):
         self.btn_browse_dash = ttk.Button(f_dash_src, text="瀏覽...", command=lambda: self.browse_path(self.entry_dashcam_src, "選擇行車紀錄器來源隨身碟"))
         self.btn_browse_dash.pack(side="left", padx=2)
 
-        # 5. 基本設定：密錄器 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
-        frame_bodycam = ttk.LabelFrame(self.content_frame, text="【基本設定：密錄器】", padding=6)
-        frame_bodycam.pack(fill="x", **pad)
+        # 4-2. 基本設定：密錄器 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
+        frame_bodycam = ttk.LabelFrame(self.f_base_content, text="【密錄器】", padding=6)
+        frame_bodycam.pack(fill="x", pady=(2, 2))
         self.frame_bodycam = frame_bodycam
 
         f_body_target = ttk.Frame(frame_bodycam)
@@ -1423,6 +1454,47 @@ class ArchiveTaskTab(ttk.Frame):
             self.log("🔒 [密錄器] 區域已鎖定，防止誤觸修改 (已儲存狀態)。")
         else:
             self.log("🔓 [密錄器] 區域已解鎖，恢復可編輯狀態 (已儲存狀態)。")
+
+    def toggle_base_settings(self):
+        """切換基本設定大區域 (行車紀錄器、密錄器) 之隱藏與展開狀態"""
+        if getattr(self, "is_base_settings_hidden", False):
+            # 目前為隱藏狀態 -> 展開
+            self.f_base_content.pack(fill="x", pady=(2, 0))
+            self.btn_toggle_base.config(text="🔼 隱藏此區域")
+            self.is_base_settings_hidden = False
+            self.log("👁️ [基本設定] 區域已展開顯示。")
+        else:
+            # 目前為展開狀態 -> 隱藏
+            self.f_base_content.pack_forget()
+            self.btn_toggle_base.config(text="🔽 展開此區域")
+            self.is_base_settings_hidden = True
+            self.log("🙈 [基本設定] 區域已收合隱藏。")
+
+        # 儲存偏好使所有分頁與下次啟動時維持相同狀態
+        self.app.config["hide_base_settings"] = self.is_base_settings_hidden
+        self.app.save_config()
+
+        # 同步更新其他分頁按鈕與顯示狀態
+        for tab in self.app.task_tabs:
+            if tab != self and hasattr(tab, 'btn_toggle_base') and hasattr(tab, 'f_base_content'):
+                tab.is_base_settings_hidden = self.is_base_settings_hidden
+                if self.is_base_settings_hidden:
+                    tab.f_base_content.pack_forget()
+                    tab.btn_toggle_base.config(text="🔽 展開此區域")
+                else:
+                    tab.f_base_content.pack(fill="x", pady=(2, 0))
+                    tab.btn_toggle_base.config(text="🔼 隱藏此區域")
+                try:
+                    tab.content_frame.update_idletasks()
+                    tab.canvas.configure(scrollregion=tab.canvas.bbox("all"))
+                except Exception:
+                    pass
+
+        try:
+            self.content_frame.update_idletasks()
+            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        except Exception:
+            pass
 
     def browse_path(self, target_entry, title):
         selected = filedialog.askdirectory(title=title)
@@ -3601,7 +3673,8 @@ class VideoBackupApp:
             "label_bodycam2": "BODYCAM2",
             "label_bodycam3": "BODYCAM3",
             "roster_path": "",
-            "update_dir": ""
+            "update_dir": "",
+            "hide_base_settings": False
         }
         if os.path.exists(CONFIG_FILE):
             try:
