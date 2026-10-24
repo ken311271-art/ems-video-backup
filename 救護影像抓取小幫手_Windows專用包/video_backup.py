@@ -2707,6 +2707,111 @@ class ArchiveTaskTab(ttk.Frame):
         messagebox.showinfo("已暫停並清除", "複製作業已成功暫停！\n本次已建立之資料夾與未完成檔案已全數刪除還原。")
 
 
+_GLOBAL_APP_REF = None
+
+def check_single_instance():
+    """檢查是否已有相同程式執行中。
+    若已有執行個體：
+    - Windows: 透過 Win32 Mutex + FindWindow 喚醒現有視窗，並通知現有視窗還原至最上層，本進程立刻退出。
+    - Mac/Linux: 透過本機 Loopback Socket (45192) 通知現有實例喚醒並退出。
+    若為第一個執行個體：正常啟動並保留常駐把手。
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+
+            MUTEX_NAME = r"Local\EMS_VideoBackup_SingleInstance_Mutex"
+            CLASS_NAME = "EMS_VideoBackup_Tray_Class"
+            WM_USER = 0x0400
+            WM_ACTIVATE_INSTANCE = WM_USER + 50
+
+            kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+            kernel32.CreateMutexW.restype = wintypes.HANDLE
+            kernel32.GetLastError.restype = wintypes.DWORD
+
+            mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
+            ERROR_ALREADY_EXISTS = 183
+
+            if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+                # 已有執行中的實例！
+                user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+                user32.FindWindowW.restype = wintypes.HWND
+                user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+                user32.PostMessageW.restype = wintypes.BOOL
+                user32.AllowSetForegroundWindow.argtypes = [wintypes.DWORD]
+                user32.AllowSetForegroundWindow.restype = wintypes.BOOL
+
+                # 授予既有視窗切換至最前景之授權 (ASFW_ANY: 0xFFFFFFFF)
+                try:
+                    user32.AllowSetForegroundWindow(0xFFFFFFFF)
+                except Exception:
+                    pass
+
+                # 尋找已在背景運作的系統匣隱藏視窗
+                hwnd = user32.FindWindowW(CLASS_NAME, None)
+                if not hwnd:
+                    import time
+                    for _ in range(10):
+                        time.sleep(0.1)
+                        hwnd = user32.FindWindowW(CLASS_NAME, None)
+                        if hwnd:
+                            break
+
+                if hwnd:
+                    user32.PostMessageW(hwnd, WM_ACTIVATE_INSTANCE, 0, 0)
+                else:
+                    hwnd_main = user32.FindWindowW(None, "救護影像抓取小幫手 v4.0")
+                    if hwnd_main:
+                        user32.ShowWindow(hwnd_main, 9)
+                        user32.SetForegroundWindow(hwnd_main)
+
+                sys.exit(0)
+
+            return mutex
+        except Exception as e:
+            print(f"[SingleInstance] Windows 檢查失敗: {e}")
+            return None
+    else:
+        try:
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(('127.0.0.1', 45192))
+                s.listen(1)
+
+                def _listen_worker():
+                    while True:
+                        try:
+                            conn, _ = s.accept()
+                            data = conn.recv(64)
+                            if b"ACTIVATE" in data:
+                                global _GLOBAL_APP_REF
+                                if _GLOBAL_APP_REF:
+                                    _GLOBAL_APP_REF.root.after(0, _GLOBAL_APP_REF.activate_and_bring_to_front)
+                            conn.close()
+                        except Exception:
+                            break
+
+                t = threading.Thread(target=_listen_worker, daemon=True)
+                t.start()
+                return s
+            except socket.error:
+                try:
+                    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    client.connect(('127.0.0.1', 45192))
+                    client.sendall(b"ACTIVATE")
+                    client.close()
+                except Exception:
+                    pass
+                sys.exit(0)
+        except Exception as e:
+            print(f"[SingleInstance] Unix 檢查失敗: {e}")
+            return None
+
 # ==============================================================================
 # Windows 系統專屬：系統匣 (通知區域 / 右下角) 原生 Win32 API 圖示管理模組
 # ==============================================================================
@@ -2718,6 +2823,12 @@ def _global_wnd_proc(hwnd, msg, wparam, lparam):
     try:
         WM_USER = 0x0400
         WM_TRAYICON = WM_USER + 20
+        WM_ACTIVATE_INSTANCE = WM_USER + 50
+
+        if msg == WM_ACTIVATE_INSTANCE:
+            if _GLOBAL_TRAY_MGR and _GLOBAL_TRAY_MGR.app:
+                _GLOBAL_TRAY_MGR.root.after(0, _GLOBAL_TRAY_MGR.app.activate_and_bring_to_front)
+            return 0
 
         if msg == WM_TRAYICON:
             # 取得低 16 位元事件代碼 (跨 32-bit / 64-bit Windows 與所有版本相容)
@@ -2772,7 +2883,7 @@ class WindowsTrayManager:
         self.hwnd = None
         self.hicon = None
         self.is_icon_visible = False
-        self.class_name = f"EMSBackupTray_{os.getpid()}"
+        self.class_name = "EMS_VideoBackup_Tray_Class"
         self.wm_taskbar_created = 0
         self._thread = None
         self._ready_event = threading.Event()
@@ -3092,6 +3203,8 @@ class WindowsTrayManager:
 
 class VideoBackupApp:
     def __init__(self, root):
+        global _GLOBAL_APP_REF
+        _GLOBAL_APP_REF = self
         self.root = root
         self.root.title("救護影像抓取小幫手 v4.0")
         self.root.geometry("750x920")
@@ -3161,6 +3274,63 @@ class VideoBackupApp:
                 )
             else:
                 self.tray_manager.show_tray_icon()
+
+    def activate_and_bring_to_front(self):
+        """當使用者重複點擊開啟程式時，喚醒既有實例並切換至最前景"""
+        if getattr(self, "is_minimized_to_tray", False):
+            # 若原本為縮小至右下角系統匣狀態，還原為正常視窗
+            self.restore_from_tray()
+        else:
+            # 若原本為一般視窗或一般工作列縮小狀態，直接還原並置頂
+            self._restoring = True
+            try:
+                self.root.deiconify()
+            except Exception:
+                pass
+
+            target_state = getattr(self, "last_window_state", "normal")
+            if target_state not in ("normal", "zoomed"):
+                target_state = "normal"
+            try:
+                self.root.state(target_state)
+            except Exception:
+                pass
+
+            try:
+                self.root.lift()
+                self.root.attributes("-topmost", True)
+                self.root.attributes("-topmost", False)
+                self.root.focus_force()
+            except Exception:
+                pass
+
+            # 在 Windows 底層調用 SetForegroundWindow
+            if sys.platform == "win32":
+                try:
+                    import ctypes
+                    user32 = ctypes.windll.user32
+                    hwnd_main = user32.FindWindowW(None, "救護影像抓取小幫手 v4.0")
+                    if hwnd_main:
+                        user32.ShowWindow(hwnd_main, 9)
+                        user32.SetForegroundWindow(hwnd_main)
+                except Exception:
+                    pass
+
+            # 若有任何子視窗 (如確認視窗或完成視窗)，一併提升至最上層
+            try:
+                for child in self.root.winfo_children():
+                    if isinstance(child, tk.Toplevel) and child.state() != "withdrawn":
+                        try:
+                            child.lift()
+                            child.grab_set()
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            def _clear_restoring():
+                self._restoring = False
+            self.root.after(500, _clear_restoring)
 
     def restore_from_tray(self):
         """從 Windows 右下角系統匣還原主視窗"""
@@ -3909,6 +4079,8 @@ class VideoBackupApp:
 
 
 if __name__ == "__main__":
+    # 單一執行個體檢查：若程式已在執行，直接喚醒既有視窗並退出新進程
+    _instance_handle = check_single_instance()
     try:
         root = tk.Tk()
         app = VideoBackupApp(root)
