@@ -3,6 +3,15 @@ import sys
 import shutil
 import json
 import re
+import time
+import socket
+import struct
+import base64
+import sqlite3
+import tempfile
+import webbrowser
+import urllib.request
+import urllib.parse
 import threading
 import subprocess
 import zipfile
@@ -21,8 +30,16 @@ if getattr(sys, 'frozen', False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
-APP_TITLE = "救護影像抓取小幫手 v4.2"
+APP_TITLE = "救護影像抓取小幫手 v4.3"
 CONFIG_FILE = os.path.join(APP_DIR, "backup_config.json")
+
+DEFAULT_CAR_CHROME_EMAIL = "AUTO"
+DEFAULT_CAR_SYSTEM_URL = "http://car.tccf.gov.tw/car/"
+CAR_SYSTEM_URL_PRESETS = [
+    "http://car.tccf.gov.tw/car/",
+    "http://car.fire.taichung.gov.tw/car/login.php",
+    "https://fems.taichung.gov.tw/HPG01000/Index",
+]
 
 # 消防分隊同仁名冊預設清單（供下拉選單與字元自動過濾，讀取勤務表後自動更新為實際同仁名冊）
 DEFAULT_OFFICER_NAMES = [
@@ -615,6 +632,1687 @@ def open_folder_in_explorer(folder_path):
             subprocess.run(["xdg-open", folder_path])
     except Exception as e:
         print(f"無法開啟資料夾: {e}")
+
+
+# ==============================================================================
+# 車輛系統登入 ＆ Chrome 設定檔掛載與背景心跳保活模組 (100% 零第三方套件依賴)
+# ==============================================================================
+
+def get_chrome_user_data_dir() -> str:
+    if sys.platform.startswith("win"):
+        return os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
+    elif sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Application Support/Google/Chrome")
+    else:
+        return os.path.expanduser("~/.config/google-chrome")
+
+
+def get_chrome_profiles_list() -> list:
+    """
+    掃描本機 Chrome Local State 與實體目錄，回傳所有使用者帳號設定檔清單：
+    [(顯示名稱, 設定檔目錄名)]
+    """
+    user_data = get_chrome_user_data_dir()
+    local_state_file = os.path.join(user_data, "Local State")
+    profiles = []
+    seen_dirs = set()
+
+    if os.path.exists(local_state_file):
+        try:
+            with open(local_state_file, "r", encoding="utf-8", errors="ignore") as f:
+                ls = json.load(f)
+            info_cache = ls.get("profile", {}).get("info_cache", {})
+            for prof_dir, info in sorted(info_cache.items(), key=lambda x: x[0]):
+                if not os.path.exists(os.path.join(user_data, prof_dir)):
+                    continue
+                name = info.get("name", "") or info.get("gaia_name", "")
+                email = info.get("user_name", "")
+                if email and name:
+                    display = f"{name} ({email}) [{prof_dir}]"
+                elif email:
+                    display = f"{email} [{prof_dir}]"
+                elif name:
+                    display = f"{name} [{prof_dir}]"
+                else:
+                    display = f"{prof_dir} [{prof_dir}]"
+                profiles.append((display, prof_dir))
+                seen_dirs.add(prof_dir)
+        except Exception:
+            pass
+
+    if os.path.exists(user_data):
+        try:
+            for item in sorted(os.listdir(user_data)):
+                if item in seen_dirs:
+                    continue
+                if item == "Default" or item.startswith("Profile "):
+                    pref_p = os.path.join(user_data, item, "Preferences")
+                    if os.path.exists(pref_p):
+                        name = item
+                        email = ""
+                        try:
+                            with open(pref_p, "r", encoding="utf-8", errors="ignore") as pf:
+                                pdata = json.load(pf)
+                            name = pdata.get("profile", {}).get("name", item)
+                            acct = pdata.get("account_info", [])
+                            if acct and isinstance(acct, list):
+                                email = acct[0].get("email", "")
+                                if not name or name == "你的 Chrome":
+                                    name = acct[0].get("full_name") or acct[0].get("given_name") or name
+                        except Exception:
+                            pass
+                        display = f"{name} ({email}) [{item}]" if email else f"{name} [{item}]"
+                        profiles.append((display, item))
+                        seen_dirs.add(item)
+        except Exception:
+            pass
+
+    profiles.append(("🆕 獨立空白沙盒視窗 (免綁定帳號) [CLEAN_SANDBOX]", "NONE"))
+    return profiles
+
+
+def find_chrome_profile_for_user(target_email: str = DEFAULT_CAR_CHROME_EMAIL, default_profile: str = "NONE") -> str:
+    """
+    自動偵測最合適的分隊 Chrome 設定檔目錄（如 Profile X 或 Default）：
+    1. 若有指定設定檔名稱或關鍵字，優先匹配
+    2. 自動掃描本機各設定檔的雲端/本機密碼庫與書籤，優先選擇已存有車輛管理系統 (car.tccf.gov.tw) 帳密或名稱含「分隊」的設定檔
+    """
+    profiles = get_chrome_profiles_list()
+    if target_email and target_email.upper() != "AUTO":
+        for disp, pdir in profiles:
+            if pdir == "NONE":
+                continue
+            if target_email.lower() in disp.lower() or target_email.lower() == pdir.lower():
+                return pdir
+
+    user_data = get_chrome_user_data_dir()
+    best_pdir = ""
+    best_score = -1
+
+    for disp, pdir in profiles:
+        if pdir == "NONE":
+            continue
+        score = 0
+        if "分隊" in disp or "救護" in disp or "消防" in disp:
+            score += 50
+        prof_path = os.path.join(user_data, pdir)
+        for db_name in ("Login Data For Account", "Login Data", "Bookmarks", "AccountBookmarks"):
+            fpath = os.path.join(prof_path, db_name)
+            if os.path.exists(fpath):
+                try:
+                    with open(fpath, "rb") as bf:
+                        raw_bytes = bf.read(2 * 1024 * 1024)
+                    if b"car.tccf.gov.tw" in raw_bytes or b"car.fire.taichung.gov.tw" in raw_bytes:
+                        score += 100
+                except Exception:
+                    pass
+        if score > best_score:
+            best_score = score
+            best_pdir = pdir
+
+    if best_pdir and best_score > 0:
+        return best_pdir
+
+    for disp, pdir in profiles:
+        if pdir != "NONE":
+            return pdir
+    return default_profile
+
+
+def resolve_chrome_profile(user_input: str) -> str:
+    """將選單顯示字串、Email 或 Profile X 轉換為本機實際 Chrome 設定檔目錄名"""
+    if not user_input:
+        return find_chrome_profile_for_user()
+    user_input = user_input.strip()
+    if (
+        user_input.upper() in ("NONE", "CLEAN_SANDBOX", "CAR_CLEAN_SANDBOX")
+        or "獨立空白沙盒" in user_input
+        or "CLEAN_SANDBOX" in user_input
+    ):
+        return "NONE"
+
+    profiles = get_chrome_profiles_list()
+    avail_dirs = {pdir for _, pdir in profiles if pdir != "NONE"}
+    avail_lower_map = {pdir.lower(): pdir for pdir in avail_dirs}
+
+    for disp, pdir in profiles:
+        if pdir != "NONE" and user_input == disp:
+            return pdir
+
+    target_dir = ""
+    m = re.search(r"\[([^\[\]]+)\]\s*$", user_input)
+    if m:
+        target_dir = m.group(1).strip()
+    elif user_input.lower() in avail_lower_map:
+        target_dir = avail_lower_map[user_input.lower()]
+    elif user_input.startswith("Profile ") or user_input.lower() == "default":
+        target_dir = "Default" if user_input.lower() == "default" else user_input
+    else:
+        for disp, pdir in profiles:
+            if pdir == "NONE":
+                continue
+            if user_input.lower() in disp.lower():
+                target_dir = pdir
+                break
+
+    if target_dir:
+        if target_dir in avail_dirs:
+            return target_dir
+        if target_dir.lower() in avail_lower_map:
+            return avail_lower_map[target_dir.lower()]
+
+    fallback = find_chrome_profile_for_user()
+    if fallback and fallback in avail_dirs:
+        return fallback
+    return "NONE"
+
+
+def get_chrome_executable() -> str:
+    """自動偵測作業系統中的 Chrome 執行檔路徑"""
+    if sys.platform == "darwin":
+        paths = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        ]
+        for p in paths:
+            if os.path.exists(p):
+                return p
+        return "Google Chrome"
+    elif sys.platform.startswith("win"):
+        paths = [
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+        ]
+        for p in paths:
+            if os.path.exists(p):
+                return p
+        return "chrome.exe"
+    return "google-chrome"
+
+
+def get_car_local_secure_profile_root() -> str:
+    """
+    將車輛系統受控瀏覽器設定檔存放於本機使用者專屬 AppData 目錄（而非程式所在資料夾 APP_DIR），
+    確保打包或分享程式資料夾時絕不會外流 Chrome 設定檔或密碼庫。
+    """
+    if sys.platform.startswith("win"):
+        base = os.path.expandvars(r"%LOCALAPPDATA%")
+        if not base or "%" in base:
+            base = os.path.expanduser(r"~\AppData\Local")
+        return os.path.join(base, "TCCFD_EMS_Backup", "chrome_car_profile")
+    elif sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Application Support/TCCFD_EMS_Backup/chrome_car_profile")
+    else:
+        return os.path.expanduser("~/.local/share/TCCFD_EMS_Backup/chrome_car_profile")
+
+
+def activate_chrome_window():
+    """將現有的 Chrome 視窗喚醒至最上層"""
+    if sys.platform == "darwin":
+        subprocess.run(["osascript", "-e", 'tell application "Google Chrome" to activate'], capture_output=True)
+    elif sys.platform.startswith("win"):
+        cmd = 'powershell -WindowStyle Hidden -Command "$w = New-Object -ComObject WScript.Shell; $w.AppActivate(\'Google Chrome\')"'
+        try:
+            subprocess.Popen(cmd, shell=True)
+        except Exception:
+            pass
+
+
+def open_chrome_url(url: str, profile_dir: str = None):
+    """使用日常原生 Chrome 與指定設定檔開啟網址"""
+    prof = resolve_chrome_profile(profile_dir) if profile_dir else find_chrome_profile_for_user()
+    insecure_flag = "--unsafely-treat-insecure-origin-as-secure=http://car.tccf.gov.tw,http://car.fire.taichung.gov.tw,http://inside.fire.taichung.gov.tw,http://fixnew.fire.taichung.gov.tw,http://training.fire.taichung.gov.tw"
+    if prof == "NONE":
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", "-a", "Google Chrome", url, "--args", insecure_flag])
+        elif sys.platform.startswith("win"):
+            exe = get_chrome_executable()
+            if os.path.exists(exe):
+                subprocess.Popen([exe, insecure_flag, url])
+            else:
+                try:
+                    subprocess.Popen(f'start chrome "{url}"', shell=True)
+                except Exception:
+                    webbrowser.open(url)
+        else:
+            webbrowser.open(url)
+        return
+
+    if sys.platform == "darwin":
+        subprocess.Popen([
+            "open", "-a", "Google Chrome", url,
+            "--args", f"--profile-directory={prof}", insecure_flag
+        ])
+    elif sys.platform.startswith("win"):
+        exe = get_chrome_executable()
+        if os.path.exists(exe):
+            subprocess.Popen([exe, f"--profile-directory={prof}", insecure_flag, url])
+        else:
+            try:
+                subprocess.Popen(f'start chrome --profile-directory="{prof}" {insecure_flag} "{url}"', shell=True)
+            except Exception:
+                webbrowser.open(url)
+    else:
+        webbrowser.open(url)
+
+
+def build_car_heartbeat_bookmarklet() -> str:
+    """建立可於任何瀏覽器執行的車輛系統防斷線心跳書籤腳本"""
+    return (
+        "(function(){"
+        "function sendPing(manual){"
+        "fetch(window.location.href,{method:'GET',cache:'no-store',credentials:'include'})"
+        ".then(function(r){"
+        "var t=new Date().toLocaleTimeString();"
+        "var b=document.getElementById('__car_heartbeat_pill');"
+        "if(!b){"
+        "b=document.createElement('div');b.id='__car_heartbeat_pill';"
+        "b.style.cssText='position:fixed;bottom:16px;right:16px;background:rgba(15,23,42,0.9);color:#f8fafc;padding:6px 14px;border-radius:20px;font-size:12px;z-index:999999;box-shadow:0 4px 14px rgba(0,0,0,0.3);font-family:sans-serif;cursor:pointer;';"
+        "b.onclick=function(){sendPing(true);};"
+        "(document.body||document.documentElement).appendChild(b);"
+        "}"
+        "b.innerHTML='🟢 <strong>車輛系統保活中</strong> <span style=\"color:#94a3b8;font-size:11px\">'+t+'</span>';"
+        "if(manual)alert('💓 車輛系統心跳封包已成功送出！('+t+')');"
+        "}).catch(function(){});"
+        "}"
+        "if(!window.__car_heartbeat_inpage){"
+        "window.__car_heartbeat_inpage=setInterval(function(){sendPing(false);},180000);"
+        "}"
+        "sendPing(true);"
+        "})();"
+    )
+
+
+class VehicleCDPController:
+    """
+    車輛系統專用受控瀏覽器管理器 (Chrome DevTools Protocol)
+    - 採用獨立 Port 9223 與本機 AppData 隔離區，與日常 Chrome 及人事差勤助手 (Port 9222) 完全共存不衝突
+    - 自動尋找並同步掛載分隊 Chrome 設定檔的雲端書籤與雲端密碼庫 (Login Data For Account)
+    - 透過原生 socket RFC 6455 WebSocket 雙向協議在背景靜默發送防斷線心跳，100% 零第三方套件依賴
+    """
+    def __init__(self, port: int = 9223, profile_dir: str = None, initial_url: str = DEFAULT_CAR_SYSTEM_URL):
+        self.port = port
+        self.profile_dir = profile_dir or get_car_local_secure_profile_root()
+        self.clean_profile_dir = os.path.join(self.profile_dir, "clean_mode")
+        self.user_profile_dir = os.path.join(self.profile_dir, "user_profiles")
+        self.active_mode_file = os.path.join(self.profile_dir, "active_profile_mode.txt")
+        self.active_acct_file = os.path.join(self.profile_dir, "active_preferred_account.txt")
+        self.initial_url = initial_url
+        self.process = None
+        self.active_profile_subdir = "Default"
+        self.active_profile_mode = self._read_saved_active_mode()
+        self.active_preferred_account = self._read_saved_preferred_account()
+        self._decrypted_car_creds = {}
+
+    def _read_saved_active_mode(self) -> str:
+        try:
+            if os.path.exists(self.active_mode_file):
+                with open(self.active_mode_file, "r", encoding="utf-8") as f:
+                    return f.read().strip() or "NONE"
+        except Exception:
+            pass
+        return "NONE"
+
+    def _write_saved_active_mode(self, mode: str):
+        self.active_profile_mode = mode or "NONE"
+        try:
+            os.makedirs(self.profile_dir, exist_ok=True)
+            with open(self.active_mode_file, "w", encoding="utf-8") as f:
+                f.write(self.active_profile_mode)
+        except Exception:
+            pass
+
+    def _read_saved_preferred_account(self) -> str:
+        try:
+            if os.path.exists(self.active_acct_file):
+                with open(self.active_acct_file, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+        except Exception:
+            pass
+        return ""
+
+    def _write_saved_preferred_account(self, acct: str):
+        self.active_preferred_account = (acct or "").strip()
+        try:
+            os.makedirs(self.profile_dir, exist_ok=True)
+            with open(self.active_acct_file, "w", encoding="utf-8") as f:
+                f.write(self.active_preferred_account)
+        except Exception:
+            pass
+
+    def get_active_profile_mode(self) -> str:
+        return self.active_profile_mode or self._read_saved_active_mode()
+
+    def is_running(self) -> bool:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json", timeout=1.2) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
+    def get_tabs(self) -> list:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json", timeout=2.0) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return []
+
+    def get_page_tabs(self) -> list:
+        valid = []
+        for t in self.get_tabs():
+            if t.get("type") != "page":
+                continue
+            u = t.get("url", "")
+            if any(u.startswith(prefix) for prefix in ("chrome://", "chrome-extension://", "devtools://", "edge://")):
+                continue
+            valid.append(t)
+        return valid
+
+    def get_car_tabs(self, target_url: str = DEFAULT_CAR_SYSTEM_URL) -> list:
+        """取得所有屬於車輛管理系統或目標網址的分頁"""
+        target_host = ""
+        try:
+            target_host = (urllib.parse.urlparse(target_url or DEFAULT_CAR_SYSTEM_URL).hostname or "").lower()
+        except Exception:
+            pass
+
+        matched = []
+        for t in self.get_page_tabs():
+            u = t.get("url", "").lower()
+            if (
+                (target_host and target_host in u)
+                or "car.tccf.gov.tw" in u
+                or "car.fire.taichung.gov.tw" in u
+                or "fems.taichung.gov.tw" in u
+                or "/car/" in u
+            ):
+                matched.append(t)
+        return matched
+
+    def close_browser(self):
+        if self.is_running():
+            tabs = self.get_tabs()
+            for t in tabs:
+                ws = t.get("webSocketDebuggerUrl")
+                if ws:
+                    try:
+                        self._ws_call(ws, "Browser.close", {}, timeout=1.5)
+                        break
+                    except Exception:
+                        pass
+            for t in tabs:
+                tid = t.get("id")
+                if tid:
+                    try:
+                        urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json/close/{tid}", timeout=1.0)
+                    except Exception:
+                        pass
+        if self.process:
+            try:
+                self.process.terminate()
+            except Exception:
+                pass
+            self.process = None
+        for _ in range(12):
+            if not self.is_running():
+                break
+            time.sleep(0.2)
+
+    @staticmethod
+    def _win_shared_copy(src: str, dst: str) -> bool:
+        """支援 Windows 下當日常 Chrome 開啟鎖定資料庫時，以共享模式安全讀取複製"""
+        if not os.path.exists(src):
+            return False
+        try:
+            shutil.copy2(src, dst)
+            return True
+        except Exception:
+            pass
+        if sys.platform.startswith("win"):
+            try:
+                import ctypes
+                from ctypes import wintypes
+                kernel32 = ctypes.windll.kernel32
+                GENERIC_READ = 0x80000000
+                FILE_SHARE_ALL = 0x00000001 | 0x00000002 | 0x00000004
+                OPEN_EXISTING = 3
+                FILE_ATTRIBUTE_NORMAL = 0x80
+                INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+                h_file = kernel32.CreateFileW(
+                    wintypes.LPCWSTR(src),
+                    GENERIC_READ,
+                    FILE_SHARE_ALL,
+                    None,
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL,
+                    None,
+                )
+                if h_file != INVALID_HANDLE_VALUE and h_file != 0:
+                    try:
+                        chunks = []
+                        buf = ctypes.create_string_buffer(65536)
+                        bytes_read = wintypes.DWORD(0)
+                        while kernel32.ReadFile(h_file, buf, 65536, ctypes.byref(bytes_read), None):
+                            if bytes_read.value == 0:
+                                break
+                            chunks.append(buf.raw[:bytes_read.value])
+                        with open(dst, "wb") as wf:
+                            for c in chunks:
+                                wf.write(c)
+                        return True
+                    finally:
+                        kernel32.CloseHandle(h_file)
+            except Exception:
+                pass
+        return False
+
+    def get_isolated_user_data_dir(self, prof_subdir: str, is_clean_mode: bool = False) -> str:
+        if is_clean_mode or not prof_subdir or prof_subdir in ("NONE", "CLEAN_SANDBOX", "CAR_Clean_Sandbox"):
+            return self.clean_profile_dir
+        safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", prof_subdir)
+        return os.path.join(self.user_profile_dir, f"isolated_{safe_name}")
+
+    @staticmethod
+    def _win_dpapi_unprotect(raw_bytes: bytes) -> bytes:
+        """Windows 原生 CryptUnprotectData 解密 (100% 內建 ctypes，零第三方套件)"""
+        if not sys.platform.startswith("win") or not raw_bytes:
+            return b""
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class DATA_BLOB(ctypes.Structure):
+                _fields_ = [
+                    ("cbData", wintypes.DWORD),
+                    ("pbData", ctypes.POINTER(ctypes.c_char)),
+                ]
+
+            crypt32 = ctypes.windll.crypt32
+            kernel32 = ctypes.windll.kernel32
+            buf = ctypes.create_string_buffer(raw_bytes, len(raw_bytes))
+            blob_in = DATA_BLOB(len(raw_bytes), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+            blob_out = DATA_BLOB()
+            if crypt32.CryptUnprotectData(ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)):
+                try:
+                    return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+                finally:
+                    kernel32.LocalFree(blob_out.pbData)
+        except Exception:
+            pass
+        return b""
+
+    @classmethod
+    def _win_decrypt_chrome_blob(cls, encrypted_value: bytes, master_key: bytes) -> str:
+        """Windows 原生 bcrypt.dll AES-256-GCM / DPAPI 解密 Chrome Login Data 密碼 (100% 標準庫)"""
+        if not sys.platform.startswith("win") or not encrypted_value:
+            return ""
+        try:
+            if encrypted_value[:3] in (b"v10", b"v11") and master_key and len(encrypted_value) > 31:
+                import ctypes
+                from ctypes import wintypes
+
+                class BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO(ctypes.Structure):
+                    _fields_ = [
+                        ("cbSize", wintypes.ULONG),
+                        ("dwInfoVersion", wintypes.ULONG),
+                        ("pbNonce", ctypes.c_void_p),
+                        ("cbNonce", wintypes.ULONG),
+                        ("pbAuthData", ctypes.c_void_p),
+                        ("cbAuthData", wintypes.ULONG),
+                        ("pbTag", ctypes.c_void_p),
+                        ("cbTag", wintypes.ULONG),
+                        ("pbMacContext", ctypes.c_void_p),
+                        ("cbMacContext", wintypes.ULONG),
+                        ("cbAAD", wintypes.ULONG),
+                        ("cbData", ctypes.c_ulonglong),
+                        ("dwFlags", wintypes.ULONG),
+                    ]
+
+                nonce = encrypted_value[3:15]
+                ciphertext = encrypted_value[15:-16]
+                tag = encrypted_value[-16:]
+
+                bcrypt = ctypes.windll.bcrypt
+                h_alg = ctypes.c_void_p()
+                if bcrypt.BCryptOpenAlgorithmProvider(ctypes.byref(h_alg), ctypes.c_wchar_p("AES"), None, 0) != 0:
+                    return ""
+                try:
+                    mode_str = ctypes.create_unicode_buffer("ChainingModeGCM")
+                    if bcrypt.BCryptSetProperty(
+                        h_alg,
+                        ctypes.c_wchar_p("ChainingMode"),
+                        ctypes.cast(mode_str, ctypes.c_void_p),
+                         ctypes.sizeof(mode_str),
+                        0,
+                    ) != 0:
+                        return ""
+                    h_key = ctypes.c_void_p()
+                    key_buf = ctypes.create_string_buffer(master_key, len(master_key))
+                    if bcrypt.BCryptGenerateSymmetricKey(
+                        h_alg, ctypes.byref(h_key), None, 0, key_buf, len(master_key), 0
+                    ) != 0:
+                        return ""
+                    try:
+                        nonce_buf = ctypes.create_string_buffer(nonce, len(nonce))
+                        tag_buf = ctypes.create_string_buffer(tag, len(tag))
+                        auth_info = BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO()
+                        auth_info.cbSize = ctypes.sizeof(BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO)
+                        auth_info.dwInfoVersion = 1
+                        auth_info.pbNonce = ctypes.cast(nonce_buf, ctypes.c_void_p)
+                        auth_info.cbNonce = len(nonce)
+                        auth_info.pbTag = ctypes.cast(tag_buf, ctypes.c_void_p)
+                        auth_info.cbTag = len(tag)
+
+                        ct_len = len(ciphertext)
+                        ct_buf = ctypes.create_string_buffer(ciphertext, ct_len)
+                        pt_buf = ctypes.create_string_buffer(max(ct_len, 1))
+                        cb_result = wintypes.ULONG(0)
+                        status = bcrypt.BCryptDecrypt(
+                            h_key,
+                            ct_buf,
+                            ct_len,
+                            ctypes.byref(auth_info),
+                            None,
+                            0,
+                            pt_buf,
+                            ct_len,
+                            ctypes.byref(cb_result),
+                            0,
+                        )
+                        if status == 0:
+                            return pt_buf.raw[:cb_result.value].decode("utf-8", errors="ignore")
+                    finally:
+                        bcrypt.BCryptDestroyKey(h_key)
+                finally:
+                    bcrypt.BCryptCloseAlgorithmProvider(h_alg, 0)
+            elif not encrypted_value.startswith(b"v1") and not encrypted_value.startswith(b"v2"):
+                raw = cls._win_dpapi_unprotect(encrypted_value)
+                if raw:
+                    return raw.decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+        return ""
+
+    def get_saved_car_accounts(self, prof_subdir: str = None) -> list:
+        """
+        掃描指定 Chrome 設定檔 (Login Data 與 Login Data For Account) 內已儲存的所有車輛系統帳號清單
+        （依最後使用時間排序，並於支援環境快取解密密碼供瞬間切換）
+        """
+        prof = resolve_chrome_profile(prof_subdir) if prof_subdir else (
+            self.active_profile_subdir if self.active_profile_subdir not in ("Default", "CAR_Clean_Sandbox")
+            else find_chrome_profile_for_user()
+        )
+        if not prof or prof in ("NONE", "CLEAN_SANDBOX", "CAR_Clean_Sandbox"):
+            return []
+
+        sys_ud = get_chrome_user_data_dir()
+        src_prof = os.path.join(sys_ud, prof)
+        base_ud_dir = self.get_isolated_user_data_dir(prof, is_clean_mode=False)
+        dst_prof = os.path.join(base_ud_dir, prof)
+
+        master_key = b""
+        if sys.platform.startswith("win"):
+            for ls_path in (os.path.join(sys_ud, "Local State"), os.path.join(base_ud_dir, "Local State")):
+                if os.path.exists(ls_path):
+                    try:
+                        with open(ls_path, "r", encoding="utf-8", errors="ignore") as f:
+                            ls_obj = json.load(f)
+                        enc_key_b64 = ls_obj.get("os_crypt", {}).get("encrypted_key", "")
+                        if enc_key_b64:
+                            enc_key = base64.b64decode(enc_key_b64)
+                            if enc_key.startswith(b"DPAPI"):
+                                master_key = self._win_dpapi_unprotect(enc_key[5:])
+                                if master_key:
+                                    break
+                    except Exception:
+                        pass
+
+        db_candidates = [
+            os.path.join(dst_prof, "Login Data"),
+            os.path.join(dst_prof, "Login Data For Account"),
+            os.path.join(src_prof, "Login Data For Account"),
+            os.path.join(src_prof, "Login Data"),
+        ]
+
+        acct_meta = {}
+        tmp_dir = None
+        try:
+            tmp_dir = tempfile.mkdtemp(prefix="car_acct_scan_")
+            for idx, db_path in enumerate(db_candidates):
+                if not os.path.exists(db_path) or os.path.getsize(db_path) < 4096:
+                    continue
+                tmp_db = os.path.join(tmp_dir, f"scan_{idx}.db")
+                if not self._win_shared_copy(db_path, tmp_db):
+                    continue
+                conn = None
+                try:
+                    conn = sqlite3.connect(tmp_db, timeout=2.0)
+                    rows = conn.execute(
+                        """
+                        SELECT username_value, password_value, date_last_used, times_used
+                        FROM logins
+                        WHERE (
+                            origin_url LIKE '%car.tccf.gov.tw%'
+                            OR origin_url LIKE '%car.fire.taichung.gov.tw%'
+                            OR action_url LIKE '%car/check_login.php%'
+                            OR username_element = 'rt_admin_username'
+                        )
+                        AND username_value != ''
+                        AND blacklisted_by_user = 0
+                        ORDER BY date_last_used DESC, times_used DESC
+                        """
+                    ).fetchall()
+                    for u_val, pw_blob, d_used, t_used in rows:
+                        u_clean = (u_val or "").strip()
+                        if not u_clean:
+                            continue
+                        score = (int(d_used or 0), int(t_used or 0))
+                        if u_clean not in acct_meta or score > acct_meta[u_clean]:
+                            acct_meta[u_clean] = score
+                        if sys.platform.startswith("win") and pw_blob and u_clean not in self._decrypted_car_creds:
+                            dec_pw = self._win_decrypt_chrome_blob(bytes(pw_blob), master_key)
+                            if dec_pw:
+                                self._decrypted_car_creds[u_clean] = dec_pw
+                except Exception:
+                    pass
+                finally:
+                    if conn:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        finally:
+            if tmp_dir and os.path.exists(tmp_dir):
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        sorted_accts = [k for k, _ in sorted(acct_meta.items(), key=lambda item: item[1], reverse=True)]
+        return sorted_accts
+
+    def sync_from_system_profile(self, prof_subdir: str, preferred_account: str = "", target_url: str = ""):
+        """同步系統指定 Chrome 設定檔之雲端書籤、雲端密碼庫與金鑰至受控隔離容器"""
+        if not prof_subdir or prof_subdir in ("NONE", "CLEAN_SANDBOX", "CAR_Clean_Sandbox"):
+            return
+        try:
+            sys_ud = get_chrome_user_data_dir()
+            src_prof = os.path.join(sys_ud, prof_subdir)
+            if not os.path.exists(src_prof):
+                return
+
+            base_ud_dir = self.get_isolated_user_data_dir(prof_subdir, is_clean_mode=False)
+            os.makedirs(base_ud_dir, exist_ok=True)
+            dst_prof = os.path.join(base_ud_dir, prof_subdir)
+            os.makedirs(dst_prof, exist_ok=True)
+
+            first_run_sentinel = os.path.join(base_ud_dir, "First Run")
+            if not os.path.exists(first_run_sentinel):
+                try:
+                    with open(first_run_sentinel, "w", encoding="utf-8") as frf:
+                        frf.write("")
+                except Exception:
+                    pass
+
+            src_ls = os.path.join(sys_ud, "Local State")
+            dst_ls = os.path.join(base_ud_dir, "Local State")
+            if os.path.exists(src_ls):
+                if not os.path.exists(dst_ls):
+                    self._win_shared_copy(src_ls, dst_ls)
+                try:
+                    with open(src_ls, "r", encoding="utf-8", errors="ignore") as sf:
+                        s_ls_data = json.load(sf)
+                    d_ls_data = {}
+                    if os.path.exists(dst_ls):
+                        try:
+                            with open(dst_ls, "r", encoding="utf-8", errors="ignore") as df:
+                                d_ls_data = json.load(df)
+                        except Exception:
+                            d_ls_data = {}
+                    if "os_crypt" in s_ls_data:
+                        d_ls_data["os_crypt"] = s_ls_data["os_crypt"]
+                    s_cache = s_ls_data.get("profile", {}).get("info_cache", {})
+                    prof_section = d_ls_data.setdefault("profile", {})
+                    if prof_subdir in s_cache:
+                        prof_section["info_cache"] = {prof_subdir: s_cache[prof_subdir]}
+                    elif s_cache:
+                        prof_section.setdefault("info_cache", {}).update(s_cache)
+                    prof_section["last_used"] = prof_subdir
+                    prof_section["last_active_profiles"] = [prof_subdir]
+                    prof_section["show_picker_on_startup"] = False
+                    with open(dst_ls, "w", encoding="utf-8") as wf:
+                        json.dump(d_ls_data, wf, ensure_ascii=False)
+                except Exception:
+                    pass
+
+            marker_file = os.path.join(dst_prof, ".car_synced_v1")
+            first_sync = not os.path.exists(marker_file)
+
+            # 注意：不可複製 -journal / -wal 暫存鎖定檔，避免覆寫合併後引發 SQLite 回滾或鎖表
+            init_once_files = [
+                "Preferences",
+                "Login Data",
+                "Login Data For Account",
+                "Cookies",
+                "Web Data",
+                "Account Web Data",
+                "Favicons",
+                "Google Profile Picture.png",
+            ]
+            for fname in init_once_files:
+                s_file = os.path.join(src_prof, fname)
+                d_file = os.path.join(dst_prof, fname)
+                if os.path.exists(s_file) and (first_sync or not os.path.exists(d_file)):
+                    self._win_shared_copy(s_file, d_file)
+
+            if first_sync:
+                sec_pref = os.path.join(dst_prof, "Secure Preferences")
+                if os.path.exists(sec_pref):
+                    try:
+                        os.remove(sec_pref)
+                    except Exception:
+                        pass
+
+            src_net = os.path.join(src_prof, "Network")
+            dst_net = os.path.join(dst_prof, "Network")
+            if os.path.exists(src_net):
+                os.makedirs(dst_net, exist_ok=True)
+                for n_fname in ("Cookies", "TransportSecurity", "Trust Tokens"):
+                    sn_file = os.path.join(src_net, n_fname)
+                    dn_file = os.path.join(dst_net, n_fname)
+                    if os.path.exists(sn_file) and (first_sync or not os.path.exists(dn_file)):
+                        self._win_shared_copy(sn_file, dn_file)
+
+            for bm_name in ("Bookmarks", "AccountBookmarks"):
+                s_bm = os.path.join(src_prof, bm_name)
+                d_bm = os.path.join(dst_prof, bm_name)
+                if os.path.exists(s_bm) and (first_sync or not os.path.exists(d_bm)):
+                    self._win_shared_copy(s_bm, d_bm)
+
+            if first_sync:
+                try:
+                    with open(marker_file, "w", encoding="utf-8") as mf:
+                        mf.write(prof_subdir)
+                except Exception:
+                    pass
+
+            self._merge_login_databases(
+                src_prof,
+                dst_prof,
+                preferred_account=preferred_account,
+                target_url=target_url,
+            )
+        except Exception as e:
+            print("sync_from_system_profile warning:", e)
+
+    def _merge_login_databases(self, src_prof: str, dst_prof: str, preferred_account: str = "", target_url: str = ""):
+        """
+        將系統設定檔的 Login Data 與 Login Data For Account 完整合併至受控目錄的 Login Data，
+        並自動將車輛系統所有帳號雙向鏡像對齊至 car.tccf.gov.tw 與 car.fire.taichung.gov.tw 雙網域，
+        同時支援指定預設優先帶入之同仁帳號 (preferred_account)。
+        """
+        tmp_dir = None
+        try:
+            tmp_dir = tempfile.mkdtemp(prefix="car_login_merge_")
+            dst_login = os.path.join(dst_prof, "Login Data")
+            dst_acct = os.path.join(dst_prof, "Login Data For Account")
+            src_login = os.path.join(src_prof, "Login Data")
+            src_acct = os.path.join(src_prof, "Login Data For Account")
+
+            # 先清除目標目錄殘留的 -journal / -wal，避免 SQLite 鎖定或回滾
+            for base_f in (dst_login, dst_acct):
+                for suffix in ("-journal", "-wal", "-shm"):
+                    stale_f = base_f + suffix
+                    if os.path.exists(stale_f):
+                        try:
+                            os.remove(stale_f)
+                        except Exception:
+                            pass
+
+            if not os.path.exists(dst_login) or os.path.getsize(dst_login) < 4096:
+                if os.path.exists(src_login) and os.path.getsize(src_login) >= 4096:
+                    self._win_shared_copy(src_login, dst_login)
+                elif os.path.exists(src_acct) and os.path.getsize(src_acct) >= 4096:
+                    self._win_shared_copy(src_acct, dst_login)
+
+            if not os.path.exists(dst_login):
+                return
+
+            source_dbs = []
+            for idx, base_name in enumerate(("Login Data", "Login Data For Account")):
+                s_db = os.path.join(src_prof, base_name)
+                if os.path.exists(s_db) and os.path.getsize(s_db) >= 4096:
+                    t_db = os.path.join(tmp_dir, f"src_{idx}.db")
+                    if self._win_shared_copy(s_db, t_db):
+                        for suffix in ("-wal", "-journal"):
+                            s_sub = s_db + suffix
+                            if os.path.exists(s_sub):
+                                self._win_shared_copy(s_sub, t_db + suffix)
+                        source_dbs.append(t_db)
+
+            conn = sqlite3.connect(dst_login, timeout=3.0)
+            try:
+                cols_main = [r[1] for r in conn.execute("PRAGMA main.table_info(logins)").fetchall()]
+                if cols_main:
+                    for idx, t_db in enumerate(source_dbs):
+                        alias = f"src_db_{idx}"
+                        try:
+                            conn.execute(f"ATTACH DATABASE ? AS {alias}", (t_db,))
+                            cols_src = [r[1] for r in conn.execute(f"PRAGMA {alias}.table_info(logins)").fetchall()]
+                            common_cols = [c for c in cols_main if c in cols_src and c.lower() != "id"]
+                            if common_cols:
+                                col_list = ", ".join(f'"{c}"' for c in common_cols)
+                                conn.execute(
+                                    f"INSERT OR IGNORE INTO main.logins ({col_list}) "
+                                    f"SELECT {col_list} FROM {alias}.logins"
+                                )
+                                conn.commit()
+                        except Exception:
+                            pass
+                        finally:
+                            try:
+                                conn.execute(f"DETACH DATABASE {alias}")
+                            except Exception:
+                                pass
+
+                    # 跨網域雙向對齊：確保 car.tccf.gov.tw 與 car.fire.taichung.gov.tw 皆擁有完整 15+ 組車輛系統帳密
+                    non_id_cols = [c for c in cols_main if c.lower() != "id"]
+                    col_idx = {c: i for i, c in enumerate(non_id_cols)}
+                    sel_col_sql = ", ".join(f'"{c}"' for c in non_id_cols)
+
+                    car_rows = conn.execute(
+                        f"""
+                        SELECT {sel_col_sql}
+                        FROM main.logins
+                        WHERE (
+                            origin_url LIKE '%car.tccf.gov.tw%'
+                            OR origin_url LIKE '%car.fire.taichung.gov.tw%'
+                            OR action_url LIKE '%car/check_login.php%'
+                            OR username_element = 'rt_admin_username'
+                        )
+                        AND username_value != ''
+                        AND length(password_value) > 0
+                        ORDER BY date_last_used DESC, times_used DESC
+                        """
+                    ).fetchall()
+
+                    if car_rows:
+                        target_domains = [
+                            (
+                                "http://car.tccf.gov.tw/car/login.php",
+                                "http://car.tccf.gov.tw/car/check_login.php",
+                                "http://car.tccf.gov.tw/",
+                            ),
+                            (
+                                "http://car.fire.taichung.gov.tw/car/login.php",
+                                "http://car.fire.taichung.gov.tw/car/check_login.php",
+                                "http://car.fire.taichung.gov.tw/",
+                            ),
+                        ]
+                        if target_url:
+                            try:
+                                p_u = urllib.parse.urlparse(target_url)
+                                if p_u.scheme and p_u.netloc:
+                                    custom_realm = f"{p_u.scheme}://{p_u.netloc}/"
+                                    if all(r[2] != custom_realm for r in target_domains):
+                                        target_domains.append((
+                                            f"{p_u.scheme}://{p_u.netloc}/car/login.php",
+                                            f"{p_u.scheme}://{p_u.netloc}/car/check_login.php",
+                                            custom_realm,
+                                        ))
+                            except Exception:
+                                pass
+
+                        # 整理每個帳號最新且有效的模板資料列
+                        best_row_by_user = {}
+                        for r in car_rows:
+                            u_val = (r[col_idx["username_value"]] or "").strip()
+                            if u_val and u_val not in best_row_by_user:
+                                best_row_by_user[u_val] = list(r)
+
+                        now_webkit = int(time.time() * 1000000) + 11644473600000000
+                        placeholders = ", ".join(["?"] * len(non_id_cols))
+
+                        for u_val, base_vals in best_row_by_user.items():
+                            for orig_u, act_u, realm_u in target_domains:
+                                exists = conn.execute(
+                                    "SELECT 1 FROM main.logins WHERE signon_realm = ? AND username_value = ? LIMIT 1",
+                                    (realm_u, u_val),
+                                ).fetchone()
+                                if not exists:
+                                    new_vals = list(base_vals)
+                                    if "origin_url" in col_idx:
+                                        new_vals[col_idx["origin_url"]] = orig_u
+                                    if "action_url" in col_idx:
+                                        new_vals[col_idx["action_url"]] = act_u
+                                    if "signon_realm" in col_idx:
+                                        new_vals[col_idx["signon_realm"]] = realm_u
+                                    if "username_element" in col_idx:
+                                        new_vals[col_idx["username_element"]] = "rt_admin_username"
+                                    if "password_element" in col_idx:
+                                        new_vals[col_idx["password_element"]] = "rt_admin_password"
+                                    if "blacklisted_by_user" in col_idx:
+                                        new_vals[col_idx["blacklisted_by_user"]] = 0
+                                    if "scheme" in col_idx:
+                                        new_vals[col_idx["scheme"]] = 0
+                                    if "times_used" in col_idx and not new_vals[col_idx["times_used"]]:
+                                        new_vals[col_idx["times_used"]] = 1
+                                    if "date_last_used" in col_idx and not new_vals[col_idx["date_last_used"]]:
+                                        new_vals[col_idx["date_last_used"]] = now_webkit - 86400000000
+                                    try:
+                                        conn.execute(
+                                            f"INSERT OR REPLACE INTO main.logins ({sel_col_sql}) VALUES ({placeholders})",
+                                            tuple(new_vals),
+                                        )
+                                    except Exception:
+                                        pass
+
+                        # 確保所有車輛系統紀錄之欄位名稱與啟用狀態一致，使 Chrome 自動填入引擎 100% 匹配
+                        conn.execute(
+                            """
+                            UPDATE main.logins
+                            SET username_element = 'rt_admin_username',
+                                password_element = 'rt_admin_password',
+                                blacklisted_by_user = 0,
+                                times_used = CASE WHEN times_used IS NULL OR times_used < 1 THEN 1 ELSE times_used END,
+                                date_last_used = CASE WHEN date_last_used IS NULL OR date_last_used < 1000 THEN ? ELSE date_last_used END
+                            WHERE (
+                                origin_url LIKE '%car.tccf.gov.tw%'
+                                OR origin_url LIKE '%car.fire.taichung.gov.tw%'
+                                OR signon_realm LIKE '%car.tccf.gov.tw%'
+                                OR signon_realm LIKE '%car.fire.taichung.gov.tw%'
+                            )
+                            AND username_value != ''
+                            """,
+                            (now_webkit - 86400000000,),
+                        )
+
+                        # 若使用者指定了優先帶入之帳號，將該帳號之 date_last_used 提升至最高，讓 Chrome 原生自動填入該組帳密
+                        pref_clean = (preferred_account or "").strip()
+                        if pref_clean and not pref_clean.startswith("⚡") and pref_clean.upper() != "AUTO":
+                            max_row = conn.execute("SELECT MAX(date_last_used) FROM main.logins").fetchone()
+                            cur_max = int(max_row[0] or 0) if max_row else 0
+                            top_ts = max(cur_max, now_webkit) + 10000000
+                            if "date_last_filled" in col_idx:
+                                conn.execute(
+                                    """
+                                    UPDATE main.logins
+                                    SET date_last_used = ?, date_last_filled = ?, times_used = COALESCE(times_used, 1) + 1
+                                    WHERE LOWER(username_value) = LOWER(?)
+                                    """,
+                                    (top_ts, top_ts, pref_clean),
+                                )
+                            else:
+                                conn.execute(
+                                    """
+                                    UPDATE main.logins
+                                    SET date_last_used = ?, times_used = COALESCE(times_used, 1) + 1
+                                    WHERE LOWER(username_value) = LOWER(?)
+                                    """,
+                                    (top_ts, pref_clean),
+                                )
+
+                        conn.commit()
+            finally:
+                conn.close()
+
+            for suffix in ("-journal", "-wal", "-shm"):
+                for base_f in (dst_login, dst_acct):
+                    stale_f = base_f + suffix
+                    if os.path.exists(stale_f):
+                        try:
+                            os.remove(stale_f)
+                        except Exception:
+                            pass
+
+            self._win_shared_copy(dst_login, dst_acct)
+        except Exception as e:
+            print("_merge_login_databases warning:", e)
+        finally:
+            if tmp_dir and os.path.exists(tmp_dir):
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def setup_profile_bookmarks(self, prof_subdir: str = "CAR_Clean_Sandbox", is_clean_mode: bool = False):
+        """合併 AccountBookmarks 與 Bookmarks，保留分隊常用書籤列並加入車輛系統快速連結與心跳書籤"""
+        if is_clean_mode or not prof_subdir or prof_subdir in ("NONE", "CLEAN_SANDBOX", "CAR_Clean_Sandbox"):
+            prof_subdir = "CAR_Clean_Sandbox"
+            is_clean_mode = True
+        base_ud_dir = self.get_isolated_user_data_dir(prof_subdir, is_clean_mode=is_clean_mode)
+        try:
+            os.makedirs(base_ud_dir, exist_ok=True)
+            target_dir = os.path.join(base_ud_dir, prof_subdir)
+            os.makedirs(target_dir, exist_ok=True)
+            bm_file = os.path.join(target_dir, "Bookmarks")
+            acct_bm_file = os.path.join(target_dir, "AccountBookmarks")
+            pref_file = os.path.join(target_dir, "Preferences")
+
+            real_prof_name = "🆕 車輛系統沙盒" if is_clean_mode else ""
+            if not is_clean_mode:
+                try:
+                    sys_ls_file = os.path.join(get_chrome_user_data_dir(), "Local State")
+                    if os.path.exists(sys_ls_file):
+                        with open(sys_ls_file, "r", encoding="utf-8", errors="ignore") as lsf:
+                            sys_ls = json.load(lsf)
+                        p_info = sys_ls.get("profile", {}).get("info_cache", {}).get(prof_subdir, {})
+                        real_prof_name = p_info.get("name") or p_info.get("gaia_name") or ""
+                except Exception:
+                    pass
+
+            pref_data = {}
+            if os.path.exists(pref_file):
+                try:
+                    with open(pref_file, "r", encoding="utf-8", errors="ignore") as f:
+                        pref_data = json.load(f)
+                except Exception:
+                    pass
+            pref_data.setdefault("bookmark_bar", {})["show_on_all_tabs"] = True
+            pref_data["credentials_enable_service"] = True
+            pref_data["credentials_enable_autosignin"] = True
+            prof_obj = pref_data.setdefault("profile", {})
+            prof_obj["password_manager_enabled"] = True
+            prof_obj["exit_type"] = "Normal"
+            prof_obj["exited_cleanly"] = True
+            if real_prof_name:
+                prof_obj["name"] = real_prof_name
+                prof_obj["is_using_default_name"] = False
+            with open(pref_file, "w", encoding="utf-8") as f:
+                json.dump(pref_data, f, ensure_ascii=False)
+
+            car_bookmarks = [
+                ("🚗 車輛管理系統", "http://car.tccf.gov.tw/car/"),
+                ("🚒 裝備器材系統", "https://fems.taichung.gov.tw/HPG01000/Index"),
+                ("💓 車輛系統心跳保活", "javascript:" + build_car_heartbeat_bookmarklet()),
+            ]
+            car_titles = {t for t, _ in car_bookmarks}
+            now_ts = str(int(time.time() * 1000000) + 11644473600000000)
+            car_children = [
+                {
+                    "date_added": now_ts,
+                    "date_last_used": "0",
+                    "id": str(950 + idx),
+                    "name": title,
+                    "type": "url",
+                    "url": url,
+                }
+                for idx, (title, url) in enumerate(car_bookmarks)
+            ]
+
+            preserved_bar = []
+            preserved_other = []
+            seen_bar_keys = set()
+            seen_other_keys = set()
+            base_bm_template = {}
+
+            bm_sources = []
+            if not is_clean_mode:
+                src_prof_dir = os.path.join(get_chrome_user_data_dir(), prof_subdir)
+                bm_sources.extend([
+                    os.path.join(src_prof_dir, "AccountBookmarks"),
+                    os.path.join(src_prof_dir, "Bookmarks"),
+                    acct_bm_file,
+                ])
+            bm_sources.append(bm_file)
+
+            for src_bm_path in bm_sources:
+                if not os.path.exists(src_bm_path):
+                    continue
+                try:
+                    with open(src_bm_path, "r", encoding="utf-8", errors="ignore") as f:
+                        bdata = json.load(f)
+                    if not base_bm_template and isinstance(bdata, dict) and "roots" in bdata:
+                        base_bm_template = bdata
+                    r_obj = bdata.get("roots", {})
+                    for c in r_obj.get("bookmark_bar", {}).get("children", []):
+                        cname = c.get("name", "")
+                        if cname in car_titles:
+                            continue
+                        ckey = (c.get("type", ""), cname, c.get("url", ""))
+                        if ckey not in seen_bar_keys:
+                            seen_bar_keys.add(ckey)
+                            preserved_bar.append(c)
+                    for c in r_obj.get("other", {}).get("children", []):
+                        cname = c.get("name", "")
+                        ckey = (c.get("type", ""), cname, c.get("url", ""))
+                        if ckey not in seen_other_keys:
+                            seen_other_keys.add(ckey)
+                            preserved_other.append(c)
+                except Exception:
+                    pass
+
+            existing_bm = base_bm_template if base_bm_template else {}
+            roots = existing_bm.get("roots", {})
+            bar = roots.get("bookmark_bar", {"children": [], "name": "書籤列", "type": "folder"})
+            other_folder = roots.get("other", {"children": [], "name": "其他書籤", "type": "folder"})
+
+            bar["children"] = car_children + preserved_bar
+            if preserved_other:
+                other_folder["children"] = preserved_other
+
+            roots["bookmark_bar"] = bar
+            roots["other"] = other_folder
+            roots.setdefault("synced", {"children": [], "name": "行動版書籤", "type": "folder"})
+            existing_bm["roots"] = roots
+            existing_bm.setdefault("version", 1)
+
+            with open(bm_file, "w", encoding="utf-8") as f:
+                json.dump(existing_bm, f, ensure_ascii=False, indent=2)
+            if not is_clean_mode:
+                with open(acct_bm_file, "w", encoding="utf-8") as f:
+                    json.dump(existing_bm, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print("setup_profile_bookmarks warning:", e)
+
+    def ensure_car_tab(self, target_url: str = DEFAULT_CAR_SYSTEM_URL) -> dict:
+        car_tabs = self.get_car_tabs(target_url)
+        if car_tabs:
+            return car_tabs[0]
+
+        nav_url = target_url or DEFAULT_CAR_SYSTEM_URL
+        try:
+            encoded_u = urllib.parse.quote(nav_url, safe=":/?&=#")
+            req = urllib.request.Request(f"http://127.0.0.1:{self.port}/json/new?{encoded_u}", method="PUT")
+            with urllib.request.urlopen(req, timeout=2.5) as resp:
+                new_tab = json.loads(resp.read().decode("utf-8"))
+                time.sleep(0.5)
+                return new_tab
+        except Exception:
+            pass
+
+        page_tabs = self.get_page_tabs()
+        if page_tabs:
+            ws = page_tabs[0].get("webSocketDebuggerUrl")
+            if ws:
+                self._ws_eval(ws, f"window.open({json.dumps(nav_url)}, '_blank'); 'OPEN'", timeout=2.5)
+                time.sleep(0.6)
+                car_tabs = self.get_car_tabs(target_url)
+                if car_tabs:
+                    return car_tabs[0]
+        return None
+
+    def activate_window(self, target_url: str = DEFAULT_CAR_SYSTEM_URL):
+        car_tabs = self.get_car_tabs(target_url)
+        tab = car_tabs[0] if car_tabs else None
+        if tab and "id" in tab:
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json/activate/{tab['id']}", timeout=1.5)
+            except Exception:
+                pass
+        activate_chrome_window()
+
+    @staticmethod
+    def _build_insecure_origins_flag(target_url: str = DEFAULT_CAR_SYSTEM_URL) -> str:
+        """
+        建立 --unsafely-treat-insecure-origin-as-secure 參數：
+        因車輛管理系統 (http://car.tccf.gov.tw 與 http://car.fire.taichung.gov.tw) 採用純 HTTP 協定，
+        Chrome 預設將 HTTP 視為不安全來源 (IsOriginSecure=false, wait_for_username=true) 而封鎖自動填入密碼。
+        加入此安全白名單旗標後，Chrome 即會將車輛系統視為安全來源，開網頁瞬間自動填入帳號與密碼並啟用下拉選單。
+        """
+        origins = [
+            "http://car.tccf.gov.tw",
+            "http://car.fire.taichung.gov.tw",
+            "http://inside.fire.taichung.gov.tw",
+            "http://fixnew.fire.taichung.gov.tw",
+            "http://training.fire.taichung.gov.tw",
+        ]
+        if target_url:
+            try:
+                p = urllib.parse.urlparse(target_url)
+                if p.scheme == "http" and p.netloc:
+                    custom_orig = f"http://{p.netloc}"
+                    if custom_orig not in origins:
+                        origins.append(custom_orig)
+            except Exception:
+                pass
+        return "--unsafely-treat-insecure-origin-as-secure=" + ",".join(origins)
+
+    def launch_or_activate(
+        self,
+        target_url: str = DEFAULT_CAR_SYSTEM_URL,
+        profile_name: str = None,
+        preferred_account: str = "",
+        force_restart: bool = False,
+    ) -> bool:
+        prof = resolve_chrome_profile(profile_name) if profile_name else find_chrome_profile_for_user()
+        is_clean_mode = (prof == "NONE")
+        prof_subdir = "CAR_Clean_Sandbox" if is_clean_mode else prof
+        target_user_data_dir = self.get_isolated_user_data_dir(prof_subdir, is_clean_mode=is_clean_mode)
+
+        pref_acct = (preferred_account or "").strip()
+        if pref_acct.startswith("⚡") or pref_acct.upper() == "AUTO":
+            pref_acct = ""
+
+        # 先掃描設定檔中的車輛系統帳號與可用快取
+        if not is_clean_mode:
+            self.get_saved_car_accounts(prof_subdir)
+
+        if self.is_running():
+            need_restart = (
+                force_restart
+                or (self.get_active_profile_mode() != prof)
+                or (pref_acct and pref_acct != self.active_preferred_account and pref_acct not in self._decrypted_car_creds)
+            )
+            if need_restart:
+                self.close_browser()
+            else:
+                if pref_acct:
+                    self._write_saved_preferred_account(pref_acct)
+                self.ensure_car_tab(target_url)
+                if pref_acct and pref_acct in self._decrypted_car_creds:
+                    accts = self.get_saved_car_accounts(prof_subdir)
+                    self.assist_car_login_page(
+                        target_url=target_url,
+                        accounts=accts,
+                        preferred_account=pref_acct,
+                        force_fill_account=pref_acct,
+                    )
+                self.activate_window(target_url)
+                return True
+
+        self.active_profile_subdir = prof_subdir
+        self._write_saved_active_mode(prof)
+        self._write_saved_preferred_account(pref_acct)
+
+        if not is_clean_mode:
+            self.sync_from_system_profile(
+                prof_subdir,
+                preferred_account=pref_acct,
+                target_url=target_url,
+            )
+        self.setup_profile_bookmarks(prof_subdir, is_clean_mode=is_clean_mode)
+
+        cmd = [
+            get_chrome_executable(),
+            f"--user-data-dir={target_user_data_dir}",
+            f"--profile-directory={prof_subdir}",
+            f"--remote-debugging-port={self.port}",
+            "--remote-allow-origins=*",
+            self._build_insecure_origins_flag(target_url),
+            "--no-first-run",
+            "--no-default-browser-check",
+            target_url or DEFAULT_CAR_SYSTEM_URL,
+        ]
+        try:
+            self.process = subprocess.Popen(cmd)
+        except Exception as e:
+            print("Failed to launch Chrome for vehicle system:", e)
+            return False
+
+        for _ in range(25):
+            time.sleep(0.3)
+            if self.is_running():
+                return True
+        return False
+
+    def assist_car_login_page(
+        self,
+        target_url: str = DEFAULT_CAR_SYSTEM_URL,
+        accounts: list = None,
+        preferred_account: str = "",
+        force_fill_account: str = "",
+    ) -> str:
+        """
+        在車輛管理系統登入頁 (login.php) 提供智慧帳密輔助與上方快速切換列：
+        1. 自動補齊 autocomplete="username" / "current-password"，保留 Chrome 原生 :-webkit-autofill 預填密碼狀態
+        2. 於登入頁頂部顯示「🔑 Google 設定檔已同步 N 組車輛系統帳密」與帳號快速切換選單
+        3. 若使用者在網頁頂部切換其他同仁帳號，回傳 'SWITCH:<帳號>' 由主程式自動切換並填入該同仁帳密
+        """
+        if not self.is_running():
+            return "NOT_RUNNING"
+        car_tabs = self.get_car_tabs(target_url)
+        if not car_tabs:
+            return "NO_TAB"
+
+        login_tab = None
+        for t in car_tabs:
+            if "login" in (t.get("url", "") or "").lower():
+                login_tab = t
+                break
+        if not login_tab:
+            login_tab = car_tabs[0]
+
+        ws = login_tab.get("webSocketDebuggerUrl")
+        if not ws:
+            return "NO_WS"
+
+        acct_list = accounts if accounts is not None else self.get_saved_car_accounts(self.active_profile_subdir)
+        pref_clean = (preferred_account or self.active_preferred_account or "").strip()
+        if pref_clean.startswith("⚡") or pref_clean.upper() == "AUTO":
+            pref_clean = ""
+
+        direct_user = ""
+        direct_pass = ""
+        target_fill = (force_fill_account or pref_clean).strip()
+        if target_fill and target_fill in self._decrypted_car_creds:
+            direct_user = target_fill
+            direct_pass = self._decrypted_car_creds[target_fill]
+
+        payload_json = json.dumps({
+            "accounts": acct_list,
+            "preferred": pref_clean,
+            "force_fill": bool(force_fill_account),
+            "direct_user": direct_user,
+            "direct_pass": direct_pass,
+            "profile_mode": self.get_active_profile_mode(),
+        }, ensure_ascii=False)
+
+        js_assist = f"""(function(cfg) {{
+            try {{
+                if (window.__car_requested_switch_acct) {{
+                    var req = window.__car_requested_switch_acct;
+                    window.__car_requested_switch_acct = '';
+                    return 'SWITCH:' + req;
+                }}
+
+                var targetDoc = document;
+                var u = document.querySelector('input[name="rt_admin_username"], input[type="text"]');
+                var p = document.querySelector('input[name="rt_admin_password"], input[type="password"]');
+                if (!p) {{
+                    for (var i = 0; i < window.frames.length; i++) {{
+                        try {{
+                            var fd = window.frames[i].document;
+                            if (fd) {{
+                                var fp = fd.querySelector('input[name="rt_admin_password"], input[type="password"]');
+                                if (fp) {{
+                                    targetDoc = fd;
+                                    p = fp;
+                                    u = fd.querySelector('input[name="rt_admin_username"], input[type="text"]');
+                                    break;
+                                }}
+                            }}
+                        }} catch(e) {{}}
+                    }}
+                }}
+                if (!u || !p) return 'NOT_LOGIN_DOM';
+
+                if (u.getAttribute('autocomplete') !== 'username') {{
+                    u.setAttribute('autocomplete', 'username');
+                }}
+                if (p.getAttribute('autocomplete') !== 'current-password') {{
+                    p.setAttribute('autocomplete', 'current-password');
+                }}
+
+                var uAuto = false, pAuto = false;
+                try {{ uAuto = u.matches(':-webkit-autofill'); }} catch(e) {{}}
+                try {{ pAuto = p.matches(':-webkit-autofill'); }} catch(e) {{}}
+
+                if (cfg.direct_user && cfg.direct_pass) {{
+                    if (cfg.force_fill || (!uAuto && !pAuto && !u.value && !p.value)) {{
+                        u.value = cfg.direct_user;
+                        p.value = cfg.direct_pass;
+                        u.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        u.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        p.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        p.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }}
+                }}
+
+                var curUser = (u.value || '').trim();
+                var hasPass = pAuto || (p.value && p.value.length > 0);
+                var accts = cfg.accounts || [];
+
+                var bar = targetDoc.getElementById('__car_acct_helper_bar');
+                if (!bar) {{
+                    bar = targetDoc.createElement('div');
+                    bar.id = '__car_acct_helper_bar';
+                    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;background:linear-gradient(90deg,#0f172a,#1e3a8a);color:#f8fafc;padding:8px 16px;font-size:13px;z-index:999999;box-shadow:0 3px 12px rgba(0,0,0,0.28);font-family:sans-serif;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;border-bottom:2px solid #38bdf8;';
+
+                    var leftDiv = targetDoc.createElement('div');
+                    leftDiv.id = '__car_acct_status_text';
+                    leftDiv.style.cssText = 'display:flex;align-items:center;gap:8px;font-weight:bold;';
+                    bar.appendChild(leftDiv);
+
+                    var rightDiv = targetDoc.createElement('div');
+                    rightDiv.style.cssText = 'display:flex;align-items:center;gap:8px;';
+
+                    if (accts.length > 0) {{
+                        var lbl = targetDoc.createElement('span');
+                        lbl.style.cssText = 'color:#bae6fd;font-size:12px;';
+                        lbl.textContent = '切換設定檔內其他同仁帳號：';
+                        rightDiv.appendChild(lbl);
+
+                        var sel = targetDoc.createElement('select');
+                        sel.id = '__car_acct_select';
+                        sel.style.cssText = 'padding:3px 8px;border-radius:5px;border:1px solid #7dd3fc;background:#ffffff;color:#0f172a;font-size:13px;font-weight:bold;cursor:pointer;';
+                        for (var j = 0; j < accts.length; j++) {{
+                            var opt = targetDoc.createElement('option');
+                            opt.value = accts[j];
+                            opt.textContent = (j + 1) + '. ' + accts[j];
+                            sel.appendChild(opt);
+                        }}
+                        sel.onchange = function() {{
+                            var chosen = this.value;
+                            if (chosen) {{
+                                var st = targetDoc.getElementById('__car_acct_status_text');
+                                if (st) st.innerHTML = '⏳ 正在從 Google 設定檔切換並帶入 <strong>' + chosen + '</strong> 的帳號與密碼，請稍候...';
+                                window.__car_requested_switch_acct = chosen;
+                            }}
+                        }};
+                        rightDiv.appendChild(sel);
+
+                        var btn = targetDoc.createElement('button');
+                        btn.type = 'button';
+                        btn.textContent = '⚡ 帶入此帳密';
+                        btn.style.cssText = 'padding:3px 10px;border-radius:5px;border:none;background:#0284c7;color:#ffffff;font-size:12px;font-weight:bold;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.2);';
+                        btn.onclick = function() {{
+                            var s = targetDoc.getElementById('__car_acct_select');
+                            if (s && s.value) {{
+                                var st = targetDoc.getElementById('__car_acct_status_text');
+                                if (st) st.innerHTML = '⏳ 正在從 Google 設定檔切換並帶入 <strong>' + s.value + '</strong> 的帳號與密碼，請稍候...';
+                                window.__car_requested_switch_acct = s.value;
+                            }}
+                        }};
+                        rightDiv.appendChild(btn);
+                    }}
+
+                    bar.appendChild(rightDiv);
+                    (targetDoc.body || targetDoc.documentElement).appendChild(bar);
+                    if (targetDoc.body) {{
+                        targetDoc.body.style.paddingTop = '46px';
+                    }}
+                }}
+
+                var stNode = targetDoc.getElementById('__car_acct_status_text');
+                if (stNode && !window.__car_requested_switch_acct) {{
+                    if (hasPass && curUser) {{
+                        stNode.innerHTML = '🟢 <span>Google 設定檔已同步 <strong>' + accts.length + '</strong> 組帳密 ｜ 已自動帶入帳號：<strong style="color:#4ade80">' + curUser + '</strong>（密碼已填入，可直接按「登入」或點帳號框展開清單）</span>';
+                    }} else if (accts.length > 0) {{
+                        stNode.innerHTML = '🔑 <span>Google 設定檔已同步 <strong>' + accts.length + '</strong> 組車輛系統帳密 ｜ 點擊下方「帳號」輸入框即可展開密碼清單，或由右側選單切換帶入</span>';
+                    }} else {{
+                        stNode.innerHTML = '🔑 <span>車輛系統登入輔助運作中（首次登入後 Chrome 將自動詢問儲存帳號密碼）</span>';
+                    }}
+                }}
+
+                var selNode = targetDoc.getElementById('__car_acct_select');
+                if (selNode && document.activeElement !== selNode) {{
+                    var matchVal = curUser || cfg.preferred;
+                    if (matchVal) {{
+                        for (var k = 0; k < selNode.options.length; k++) {{
+                            if (selNode.options[k].value.toLowerCase() === matchVal.toLowerCase()) {{
+                                selNode.selectedIndex = k;
+                                break;
+                            }}
+                        }}
+                    }}
+                }}
+
+                return (hasPass ? 'FILLED:' : 'READY:') + (curUser || '');
+            }} catch(e) {{
+                return 'ERR:' + e;
+            }}
+        }})({payload_json})"""
+
+        ok, res = self._ws_eval(ws, js_assist, timeout=2.0)
+        if ok and isinstance(res, str):
+            return res
+        return "IDLE"
+
+    def check_car_login_state(self, target_url: str = DEFAULT_CAR_SYSTEM_URL) -> tuple:
+        """
+        檢查受控瀏覽器中車輛系統分頁狀態：
+        回傳 (has_car_tab: bool, is_logged_in: bool, is_login_page: bool, tab_title: str, tab_url: str)
+        """
+        car_tabs = self.get_car_tabs(target_url)
+        if not car_tabs:
+            return False, False, False, "", ""
+
+        js_check = """(function(){
+            try {
+                if (document.readyState !== 'complete' && document.readyState !== 'interactive') return 'LOADING';
+                var href = (window.location.href || '').toLowerCase();
+                if (href.indexOf('login.php') !== -1 || href.indexOf('/account/login') !== -1 || href.indexOf('login.asp') !== -1) {
+                    return 'LOGIN_PAGE';
+                }
+                var pw = document.querySelector('input[name="rt_admin_password"], input[type="password"]');
+                if (pw && pw.offsetParent !== null) return 'LOGIN_PAGE';
+                for (var i = 0; i < window.frames.length; i++) {
+                    try {
+                        var fdoc = window.frames[i].document;
+                        if (fdoc) {
+                            var fpw = fdoc.querySelector('input[name="rt_admin_password"], input[type="password"]');
+                            if (fpw && fpw.offsetParent !== null) return 'LOGIN_PAGE';
+                        }
+                    } catch(e) {}
+                }
+                return 'LOGGED_IN';
+            } catch(e) {
+                return 'LOGGED_IN';
+            }
+        })()"""
+
+        for t in car_tabs:
+            u = t.get("url", "")
+            title = t.get("title", "") or "車輛管理系統"
+            ws = t.get("webSocketDebuggerUrl")
+            if ws:
+                ok, state = self._ws_eval(ws, js_check, timeout=1.5)
+                if ok and state == "LOGGED_IN":
+                    return True, True, False, title, u
+            elif "login" not in u.lower():
+                return True, True, False, title, u
+
+        first_tab = car_tabs[0]
+        return True, False, True, (first_tab.get("title") or "車輛管理系統"), first_tab.get("url", "")
+
+    def evaluate_in_background(self, js_code: str, target_url: str = DEFAULT_CAR_SYSTEM_URL, timeout: float = 5.0) -> tuple:
+        """在背景靜默對車輛系統分頁執行 JavaScript，不切換分頁、不喚醒視窗、不搶焦點"""
+        if not self.is_running():
+            return False, "BROWSER_NOT_RUNNING"
+        tabs = self.get_car_tabs(target_url) or self.get_page_tabs()
+        if not tabs:
+            return False, "NO_CAR_PAGE_FOUND"
+        # 優先選擇已登入的分頁
+        target_tab = tabs[0]
+        for t in tabs:
+            if "login" not in t.get("url", "").lower():
+                target_tab = t
+                break
+        ws_url = target_tab.get("webSocketDebuggerUrl")
+        if not ws_url:
+            return False, "NO_WS_DEBUGGER_URL"
+        return self._ws_eval(ws_url, js_code, timeout=timeout)
+
+    def _ws_call(self, ws_url: str, method: str, params: dict, timeout: float = 6.0) -> tuple:
+        try:
+            u = urllib.parse.urlparse(ws_url)
+            host = u.hostname or "127.0.0.1"
+            port = u.port or self.port
+            s = socket.create_connection((host, port), timeout=timeout)
+            key = base64.b64encode(os.urandom(16)).decode().strip()
+            req = (
+                f"GET {u.path} HTTP/1.1\r\n"
+                f"Host: {host}:{port}\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                f"Sec-WebSocket-Key: {key}\r\n"
+                "Sec-WebSocket-Version: 13\r\n"
+                f"Origin: http://{host}:{port}\r\n\r\n"
+            )
+            s.sendall(req.encode("latin1"))
+
+            resp = b""
+            while b"\r\n\r\n" not in resp:
+                chunk = s.recv(1024)
+                if not chunk:
+                    break
+                resp += chunk
+            if b"101" not in resp:
+                s.close()
+                return False, "WebSocket 交握失敗"
+
+            payload = json.dumps({
+                "id": int(time.time() * 1000) % 1000000,
+                "method": method,
+                "params": params,
+            }).encode("utf-8")
+            mask_key = os.urandom(4)
+            masked_payload = bytearray(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+            length = len(payload)
+
+            header = bytearray([0x81])
+            if length <= 125:
+                header.append(0x80 | length)
+            elif length <= 65535:
+                header.append(0x80 | 126)
+                header.extend(struct.pack(">H", length))
+            else:
+                header.append(0x80 | 127)
+                header.extend(struct.pack(">Q", length))
+            header.extend(mask_key)
+            header.extend(masked_payload)
+            s.sendall(header)
+
+            data = b""
+            while len(data) < 2:
+                chunk = s.recv(1024)
+                if not chunk:
+                    break
+                data += chunk
+            if len(data) < 2:
+                s.close()
+                return True, "Executed"
+
+            pay_len = data[1] & 0x7F
+            idx = 2
+            if pay_len == 126:
+                while len(data) < 4:
+                    data += s.recv(1024)
+                pay_len = struct.unpack(">H", data[2:4])[0]
+                idx = 4
+            elif pay_len == 127:
+                while len(data) < 10:
+                    data += s.recv(1024)
+                pay_len = struct.unpack(">Q", data[2:10])[0]
+                idx = 10
+
+            while len(data) < idx + pay_len:
+                chunk = s.recv(min(8192, idx + pay_len - len(data)))
+                if not chunk:
+                    break
+                data += chunk
+            s.close()
+
+            res_obj = json.loads(data[idx:idx + pay_len].decode("utf-8", "replace"))
+            if "error" in res_obj:
+                return False, str(res_obj["error"])
+            return True, res_obj.get("result", {})
+        except Exception as e:
+            return False, str(e)
+
+    def _ws_eval(self, ws_url: str, js_code: str, timeout: float = 6.0) -> tuple:
+        ok, res = self._ws_call(
+            ws_url,
+            "Runtime.evaluate",
+            {"expression": js_code, "returnByValue": True, "awaitPromise": True},
+            timeout=timeout,
+        )
+        if not ok:
+            return False, str(res)
+        if isinstance(res, dict):
+            val = res.get("result", {}).get("value")
+            return True, str(val) if val is not None else "OK"
+        return True, str(res)
+
 
 class ArchiveTaskTab(ttk.Frame):
     """獨立的勤務影像歸檔作業分頁，支援多任務並行與狀態隔離"""
@@ -3310,6 +5008,12 @@ class VideoBackupApp:
         self.task_tabs = []
         self.roster_cache = {}
 
+        # 車輛系統登入與背景心跳保活控制器 (獨立 Port 9223，與日常 Chrome 及差勤助手互不干擾)
+        self.car_cdp = VehicleCDPController(port=9223)
+        self.last_car_heartbeat_time = 0.0
+        self.last_car_heartbeat_str = "尚未發送"
+        self.car_heartbeat_interval_sec = 180  # 每 3 分鐘自動發送防斷線心跳
+
         self.config = self.load_config()
 
         # 需求 2: 軟體啟動時，下拉選單名冊先依據前一個任務的快取紀錄
@@ -3346,6 +5050,8 @@ class VideoBackupApp:
 
         # 🚀 啟動性能優化：非同步延遲 150ms 載入勤務表，讓視窗秒開，不卡主執行緒
         self.root.after(150, self.load_officer_names_from_roster)
+        # 🚀 啟動車輛系統背景心跳監控執行緒
+        self.root.after(600, self._start_car_cdp_monitor)
         # 🚀 自動更新檢查：非同步延遲 1200ms 檢查指定資料夾是否有新版本檔案
         self.root.after(1200, self.auto_check_update_on_startup)
 
@@ -3675,7 +5381,11 @@ class VideoBackupApp:
             "label_bodycam3": "BODYCAM3",
             "roster_path": "",
             "update_dir": "",
-            "hide_base_settings": False
+            "hide_base_settings": False,
+            "car_system_url": DEFAULT_CAR_SYSTEM_URL,
+            "car_chrome_profile": DEFAULT_CAR_CHROME_EMAIL,
+            "car_preferred_account": "AUTO",
+            "car_heartbeat_enabled": True
         }
         if os.path.exists(CONFIG_FILE):
             try:
@@ -3687,7 +5397,16 @@ class VideoBackupApp:
 
     def save_config(self):
         try:
-            # 1. 從設定分頁抓取最新設定 (含勤務表路徑與設備硬碟標籤)
+            # 1. 從設定分頁抓取最新設定 (含車輛系統、勤務表路徑與設備硬碟標籤)
+            if hasattr(self, 'cb_car_system_url'):
+                self.config["car_system_url"] = self.cb_car_system_url.get().strip() or DEFAULT_CAR_SYSTEM_URL
+            if hasattr(self, 'cb_car_chrome_profile'):
+                self.config["car_chrome_profile"] = resolve_chrome_profile(self.cb_car_chrome_profile.get().strip())
+            if hasattr(self, 'cb_car_account'):
+                sel_acct = self.get_selected_car_account()
+                self.config["car_preferred_account"] = sel_acct if sel_acct else "AUTO"
+            if hasattr(self, 'var_car_heartbeat'):
+                self.config["car_heartbeat_enabled"] = bool(self.var_car_heartbeat.get())
             if hasattr(self, 'entry_roster_path'):
                 self.config["roster_path"] = self.entry_roster_path.get().strip()
             if hasattr(self, 'entry_update_dir'):
@@ -3911,8 +5630,109 @@ class VideoBackupApp:
 
             self.update_tab_labels()
 
-    def setup_settings_tab(self, parent):
+    def setup_settings_tab(self, outer_parent):
+        # 建立防裁切平滑捲動 Canvas 容器，適應各尺寸筆電與 DPI 縮放
+        self.settings_canvas = tk.Canvas(outer_parent, borderwidth=0, highlightthickness=0, bg=self.bg_color)
+        self.settings_scrollbar = ttk.Scrollbar(outer_parent, orient="vertical", command=self.settings_canvas.yview)
+        parent = ttk.Frame(self.settings_canvas)
+
+        parent.bind(
+            "<Configure>",
+            lambda e: self.settings_canvas.configure(scrollregion=self.settings_canvas.bbox("all"))
+        )
+        self.settings_canvas_win = self.settings_canvas.create_window((0, 0), window=parent, anchor="nw")
+        self.settings_canvas.configure(yscrollcommand=self.settings_scrollbar.set)
+        self.settings_canvas.bind('<Configure>', lambda e: self.settings_canvas.itemconfig(self.settings_canvas_win, width=e.width))
+
+        self.settings_canvas.pack(side="left", fill="both", expand=True)
+        self.settings_scrollbar.pack(side="right", fill="y")
+
         pad = {'padx': 12, 'pady': 6}
+
+        # 需求：快速設定新增「車輛系統登入」按鈕與背景心跳保活
+        frame_car = ttk.LabelFrame(parent, text="【車輛系統登入 ＆ 背景心跳保活】(自動開啟分隊 Chrome 設定檔並維持連線)", padding=10)
+        frame_car.pack(fill="x", **pad)
+        self.frame_car = frame_car
+
+        f_car_top = ttk.Frame(frame_car)
+        f_car_top.pack(fill="x", pady=(2, 6))
+
+        self.btn_car_login = ttk.Button(
+            f_car_top,
+            text="🚗 車輛系統登入",
+            style="Action.TButton",
+            command=self.on_click_car_system_login
+        )
+        self.btn_car_login.pack(side="left", ipadx=6, ipady=4, padx=(0, 6))
+
+        ttk.Button(
+            f_car_top,
+            text="💓 立即發送心跳",
+            command=lambda: self.send_car_heartbeat(manual=True)
+        ).pack(side="left", ipady=2, padx=2)
+
+        ttk.Button(
+            f_car_top,
+            text="🚀 一般 Chrome 開啟",
+            command=self.open_car_in_normal_chrome
+        ).pack(side="left", ipady=2, padx=2)
+
+        self.lbl_car_status = ttk.Label(
+            frame_car,
+            text="🔴 狀態：尚未啟動（點擊上方「🚗 車輛系統登入」開啟分隊 Chrome 設定檔並啟動背景心跳）",
+            foreground="#C62828",
+            font=('Helvetica', 9, 'bold')
+        )
+        self.lbl_car_status.pack(anchor="w", pady=(0, 6))
+
+        f_car_prof = ttk.Frame(frame_car)
+        f_car_prof.pack(fill="x", pady=2)
+        ttk.Label(f_car_prof, text="Chrome 設定檔：", width=16).pack(side="left")
+
+        prof_list = get_chrome_profiles_list()
+        prof_displays = [disp for disp, _ in prof_list]
+        saved_prof_cfg = self.config.get("car_chrome_profile", DEFAULT_CAR_CHROME_EMAIL)
+        resolved_prof = resolve_chrome_profile(saved_prof_cfg)
+        initial_prof_disp = self.find_car_profile_display(resolved_prof)
+
+        self.cb_car_chrome_profile = ttk.Combobox(f_car_prof, values=prof_displays, width=38)
+        self.cb_car_chrome_profile.set(initial_prof_disp)
+        self.cb_car_chrome_profile.pack(side="left", padx=4)
+        self.cb_car_chrome_profile.bind("<<ComboboxSelected>>", lambda e: self.refresh_car_accounts_list())
+        ttk.Button(f_car_prof, text="🔄 重新掃描帳號", command=self.refresh_car_chrome_profiles).pack(side="left", padx=2)
+
+        f_car_acct = ttk.Frame(frame_car)
+        f_car_acct.pack(fill="x", pady=2)
+        ttk.Label(f_car_acct, text="預設帶入帳號：", width=16).pack(side="left")
+        self.cb_car_account = ttk.Combobox(f_car_acct, values=[], width=38)
+        self.cb_car_account.pack(side="left", padx=4)
+        self.cb_car_account.bind("<<ComboboxSelected>>", self.on_car_account_selected)
+        ttk.Button(
+            f_car_acct,
+            text="⚡ 切換並帶入此帳號",
+            command=self.on_switch_car_account_clicked
+        ).pack(side="left", padx=2)
+        self.lbl_car_acct_count = ttk.Label(f_car_acct, text="", foreground="#1565C0", font=('Helvetica', 9, 'bold'))
+        self.lbl_car_acct_count.pack(side="left", padx=4)
+        self.refresh_car_accounts_list()
+
+        f_car_url = ttk.Frame(frame_car)
+        f_car_url.pack(fill="x", pady=2)
+        ttk.Label(f_car_url, text="車輛系統網址：", width=16).pack(side="left")
+        self.cb_car_system_url = ttk.Combobox(f_car_url, values=CAR_SYSTEM_URL_PRESETS, width=38)
+        self.cb_car_system_url.set(self.config.get("car_system_url", DEFAULT_CAR_SYSTEM_URL))
+        self.cb_car_system_url.pack(side="left", padx=4)
+        ttk.Label(f_car_url, text="(可下拉選取或自行修改)", foreground="#666666").pack(side="left", padx=2)
+
+        f_car_hb = ttk.Frame(frame_car)
+        f_car_hb.pack(fill="x", pady=(4, 0))
+        self.var_car_heartbeat = tk.BooleanVar(value=self.config.get("car_heartbeat_enabled", True))
+        ttk.Checkbutton(
+            f_car_hb,
+            text="💓 登入後自動進行背景心跳運作（每 3 分鐘靜默發送保活封包，防止公務電腦閒置登出、不搶焦點）",
+            variable=self.var_car_heartbeat,
+            command=self.on_toggle_car_heartbeat
+        ).pack(anchor="w")
 
         frame_roster = ttk.LabelFrame(parent, text="【當月勤務表設定】(依出勤時段快速自動帶入同仁姓名)", padding=10)
         frame_roster.pack(fill="x", **pad)
@@ -3991,7 +5811,7 @@ class VideoBackupApp:
         ).pack(anchor="w", pady=(2, 0))
 
         # 需求 1: 「💾 儲存所有設定」獨立移至所有設定下方，明確涵蓋當月勤務表路徑與設備標籤名稱
-                # 需求：未錄影空資料夾備註原因自訂清單
+        # 需求：未錄影空資料夾備註原因自訂清單
         frame_reasons = ttk.LabelFrame(parent, text="【未錄影空資料夾備註原因設定】(每行一筆，供預檢視窗 0 部影片時秒選)", padding=10)
         frame_reasons.pack(fill="x", **pad)
 
@@ -4023,7 +5843,7 @@ class VideoBackupApp:
 
         self.btn_save_cfg = ttk.Button(
             frame_save_bar,
-            text="💾 儲存所有設定 (含更新資料夾、勤務表路徑、設備標籤與原因)",
+            text="💾 儲存所有設定 (含車輛系統、更新資料夾、勤務表路徑、設備標籤與原因)",
             command=self.save_settings_clicked
         )
         self.btn_save_cfg.pack(side="left", ipady=3)
@@ -4045,6 +5865,405 @@ class VideoBackupApp:
         self.txt_disks.pack(fill="both", expand=True)
 
         self.refresh_disk_list()
+
+        def _on_settings_mousewheel(event):
+            if sys.platform == "darwin":
+                self.settings_canvas.yview_scroll(int(-1 * event.delta), "units")
+            elif event.num == 4:
+                self.settings_canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                self.settings_canvas.yview_scroll(1, "units")
+            else:
+                self.settings_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def _bind_settings_wheel(w):
+            w.bind("<MouseWheel>", _on_settings_mousewheel, add="+")
+            w.bind("<Button-4>", _on_settings_mousewheel, add="+")
+            w.bind("<Button-5>", _on_settings_mousewheel, add="+")
+            for c in w.winfo_children():
+                _bind_settings_wheel(c)
+
+        _bind_settings_wheel(parent)
+
+    def find_car_profile_display(self, profile_key: str) -> str:
+        """根據 Chrome 設定檔目錄名反查下拉選單顯示字串"""
+        profiles = get_chrome_profiles_list()
+        for disp, pdir in profiles:
+            if pdir == profile_key:
+                return disp
+        auto_prof = find_chrome_profile_for_user()
+        for disp, pdir in profiles:
+            if pdir == auto_prof:
+                return disp
+        return profiles[0][0] if profiles else "Default [Default]"
+
+    def get_selected_car_chrome_profile(self) -> str:
+        if hasattr(self, 'cb_car_chrome_profile'):
+            return resolve_chrome_profile(self.cb_car_chrome_profile.get().strip())
+        return resolve_chrome_profile(self.config.get("car_chrome_profile", DEFAULT_CAR_CHROME_EMAIL))
+
+    def get_selected_car_url(self) -> str:
+        if hasattr(self, 'cb_car_system_url'):
+            u = self.cb_car_system_url.get().strip()
+            if u:
+                return u
+        return self.config.get("car_system_url", DEFAULT_CAR_SYSTEM_URL) or DEFAULT_CAR_SYSTEM_URL
+
+    def get_selected_car_account(self) -> str:
+        if hasattr(self, 'cb_car_account'):
+            raw = self.cb_car_account.get().strip()
+            if not raw or raw.startswith("⚡") or raw.upper() == "AUTO":
+                return ""
+            return raw.split()[0].strip()
+        saved = (self.config.get("car_preferred_account") or "").strip()
+        if not saved or saved.startswith("⚡") or saved.upper() == "AUTO":
+            return ""
+        return saved
+
+    def refresh_car_accounts_list(self):
+        """從選定的 Chrome 設定檔掃描所有已儲存的車輛系統帳號，更新下拉選單"""
+        prof = self.get_selected_car_chrome_profile()
+        accts = self.car_cdp.get_saved_car_accounts(prof)
+        auto_label = f"⚡ 自動帶入最近使用帳號 ({accts[0]})" if accts else "⚡ 自動帶入最近使用帳號"
+        values = [auto_label] + accts
+        if hasattr(self, 'cb_car_account'):
+            self.cb_car_account['values'] = values
+            saved_pref = (self.config.get("car_preferred_account") or "").strip()
+            if saved_pref and saved_pref != "AUTO" and saved_pref in accts:
+                self.cb_car_account.set(saved_pref)
+            else:
+                self.cb_car_account.set(auto_label)
+        if hasattr(self, 'lbl_car_acct_count'):
+            if accts:
+                self.lbl_car_acct_count.config(
+                    text=f"🔑 已同步 {len(accts)} 組帳密",
+                    foreground="#1565C0"
+                )
+            else:
+                self.lbl_car_acct_count.config(
+                    text="(尚無已存帳密)",
+                    foreground="#757575"
+                )
+
+    def on_car_account_selected(self, event=None):
+        self.save_config()
+
+    def on_switch_car_account_clicked(self):
+        """點擊「⚡ 切換並帶入此帳號」：立即切換優先帶入之同仁帳號並開啟/重新載入車輛系統登入頁"""
+        self.save_config()
+        prof = self.get_selected_car_chrome_profile()
+        target_url = self.get_selected_car_url()
+        pref_acct = self.get_selected_car_account()
+        disp_name = self.find_car_profile_display(prof)
+        acct_disp = pref_acct if pref_acct else "最近使用帳號"
+
+        if hasattr(self, 'lbl_car_status'):
+            self.lbl_car_status.config(
+                text=f"⏳ 正在切換並帶入帳號 [{acct_disp}] 之密碼至車輛系統，請稍候...",
+                foreground="#E65100"
+            )
+            self.root.update_idletasks()
+
+        def _switch_worker():
+            force_restart = bool(
+                self.car_cdp.is_running()
+                and pref_acct
+                and pref_acct not in self.car_cdp._decrypted_car_creds
+            )
+            ok = self.car_cdp.launch_or_activate(
+                target_url,
+                profile_name=prof,
+                preferred_account=pref_acct,
+                force_restart=force_restart,
+            )
+            self.root.after(0, lambda: self._after_car_browser_launched(ok, disp_name, target_url, pref_acct))
+
+        threading.Thread(target=_switch_worker, daemon=True).start()
+
+    def _apply_switched_car_account(self, acct: str):
+        if not acct:
+            return
+        self.config["car_preferred_account"] = acct
+        if hasattr(self, 'cb_car_account'):
+            self.cb_car_account.set(acct)
+        self.save_config()
+
+    def refresh_car_chrome_profiles(self):
+        profiles = get_chrome_profiles_list()
+        prof_displays = [disp for disp, _ in profiles]
+        if hasattr(self, 'cb_car_chrome_profile'):
+            self.cb_car_chrome_profile['values'] = prof_displays
+            cur_prof = self.get_selected_car_chrome_profile()
+            self.cb_car_chrome_profile.set(self.find_car_profile_display(cur_prof))
+        self.refresh_car_accounts_list()
+
+    def on_click_car_system_login(self):
+        """點擊「🚗 車輛系統登入」：啟動或喚醒綁定分隊 Chrome 設定檔的受控 Chrome 並開啟車輛管理系統"""
+        self.save_config()
+        prof = self.get_selected_car_chrome_profile()
+        target_url = self.get_selected_car_url()
+        pref_acct = self.get_selected_car_account()
+        disp_name = self.find_car_profile_display(prof)
+
+        if (
+            self.car_cdp.is_running()
+            and self.car_cdp.get_active_profile_mode() == prof
+            and (not pref_acct or pref_acct == self.car_cdp.active_preferred_account or pref_acct in self.car_cdp._decrypted_car_creds)
+        ):
+            self.car_cdp.ensure_car_tab(target_url)
+            if pref_acct and pref_acct in self.car_cdp._decrypted_car_creds:
+                self.car_cdp.assist_car_login_page(
+                    target_url=target_url,
+                    preferred_account=pref_acct,
+                    force_fill_account=pref_acct,
+                )
+            self.car_cdp.activate_window(target_url)
+            has_tab, is_logged_in, _, _, _ = self.car_cdp.check_car_login_state(target_url)
+            if is_logged_in and self.var_car_heartbeat.get():
+                self.send_car_heartbeat(manual=False)
+            return
+
+        if hasattr(self, 'lbl_car_status'):
+            self.lbl_car_status.config(
+                text=f"⏳ 正在開啟 Chrome 設定檔 [{disp_name}] 並同步車輛系統帳密，請稍候...",
+                foreground="#E65100"
+            )
+            self.root.update_idletasks()
+
+        def _launch_worker():
+            ok = self.car_cdp.launch_or_activate(
+                target_url,
+                profile_name=prof,
+                preferred_account=pref_acct,
+            )
+            if not ok:
+                open_chrome_url(target_url, prof)
+            self.root.after(0, lambda: self._after_car_browser_launched(ok, disp_name, target_url, pref_acct))
+
+        threading.Thread(target=_launch_worker, daemon=True).start()
+
+    def _after_car_browser_launched(self, ok: bool, disp_name: str, target_url: str, pref_acct: str = ""):
+        self.refresh_car_accounts_list()
+        acct_hint = f"（已自動帶入帳號 {pref_acct}）" if pref_acct else "（已自動帶入設定檔帳密）"
+        if ok:
+            self.lbl_car_status.config(
+                text=f"🟡 已開啟 [{disp_name}]{acct_hint}！請點擊「登入」，登入後即自動每 3 分鐘背景心跳保活。",
+                foreground="#E65100"
+            )
+        else:
+            self.lbl_car_status.config(
+                text=f"🟢 已透過一般 Chrome 開啟 [{disp_name}]（已將防斷線心跳腳本複製至剪貼簿）",
+                foreground="#2E7D32"
+            )
+
+    def open_car_in_normal_chrome(self):
+        """使用一般日常 Chrome 開啟車輛系統，並自動將防斷線心跳書籤腳本複製至剪貼簿"""
+        self.save_config()
+        prof = self.get_selected_car_chrome_profile()
+        target_url = self.get_selected_car_url()
+        try:
+            bookmarklet = "javascript:" + build_car_heartbeat_bookmarklet()
+            self.root.clipboard_clear()
+            self.root.clipboard_append(bookmarklet)
+            self.root.update()
+        except Exception:
+            pass
+        open_chrome_url(target_url, prof)
+        if hasattr(self, 'lbl_car_status'):
+            self.lbl_car_status.config(
+                text=f"🚀 已以日常 Chrome [{prof}] 開啟車輛系統！（防斷線心跳腳本已同步複製至剪貼簿）",
+                foreground="#1565C0"
+            )
+
+    def on_toggle_car_heartbeat(self):
+        self.save_config()
+        enabled = self.var_car_heartbeat.get()
+        if enabled:
+            target_url = self.get_selected_car_url()
+            if self.car_cdp.is_running():
+                _, is_logged_in, _, _, _ = self.car_cdp.check_car_login_state(target_url)
+                if is_logged_in:
+                    self.send_car_heartbeat(manual=False)
+
+    def send_car_heartbeat(self, manual: bool = False) -> bool:
+        """
+        向車輛管理系統送出背景防斷線心跳封包：
+        - 於分頁內部安裝每 3 分鐘常駐 fetch 心跳定時器 + 立即送出一次 GET/HEAD 保活請求
+        - 於網頁右下角顯示「🟢 車輛系統保活中」即時狀態膠囊
+        - 完全在背景靜默執行，不切換分頁、不喚醒視窗、不搶焦點
+        """
+        target_url = self.get_selected_car_url()
+        if not self.car_cdp.is_running():
+            if manual:
+                messagebox.showwarning(
+                    "車輛系統尚未啟動",
+                    "車輛系統受控 Chrome 尚未啟動！\n請先點擊【🚗 車輛系統登入】按鈕開啟瀏覽器並完成登入。"
+                )
+            return False
+
+        has_tab, is_logged_in, is_login_page, _, _ = self.car_cdp.check_car_login_state(target_url)
+        if not has_tab:
+            if manual:
+                messagebox.showwarning("無車輛系統分頁", "目前瀏覽器中未開啟車輛系統分頁！\n請點擊【🚗 車輛系統登入】重新導向。")
+            return False
+        if not is_logged_in or is_login_page:
+            if manual:
+                messagebox.showinfo("請先完成登入", "偵測到車輛系統目前仍在「登入畫面」！\n請先在 Chrome 視窗登入帳號密碼，登入後系統即會自動啟動背景心跳運作。")
+            return False
+
+        js_ping = """
+        (() => {
+            try {
+                function updateCarBadge(msg, color) {
+                    try {
+                        let targetDoc = document;
+                        if (document.body && document.body.tagName && document.body.tagName.toLowerCase() === 'frameset') {
+                            for (let i = 0; i < window.frames.length; i++) {
+                                try {
+                                    if (window.frames[i].document && window.frames[i].document.body) {
+                                        targetDoc = window.frames[i].document;
+                                    }
+                                } catch(e) {}
+                            }
+                        }
+                        let b = targetDoc.getElementById('__car_heartbeat_pill');
+                        if (!b) {
+                            b = targetDoc.createElement('div');
+                            b.id = '__car_heartbeat_pill';
+                            b.style.cssText = 'position:fixed;bottom:14px;right:14px;background:rgba(15,23,42,0.88);color:#f8fafc;padding:6px 14px;border-radius:20px;font-size:12px;z-index:999999;box-shadow:0 4px 14px rgba(0,0,0,0.3);font-family:sans-serif;display:flex;align-items:center;gap:8px;backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,0.18);cursor:pointer;user-select:none;';
+                            b.title = '車輛系統防斷線背景心跳運作中 (每 3 分鐘自動維持連線)';
+                            (targetDoc.body || targetDoc.documentElement).appendChild(b);
+                        }
+                        b.innerHTML = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (color || '#10b981') + ';box-shadow:0 0 6px ' + (color || '#10b981') + '"></span> <strong>車輛系統保活中</strong> <span style="color:#94a3b8;font-size:11px">' + (msg || new Date().toLocaleTimeString()) + '</span>';
+                    } catch(e) {}
+                }
+
+                function doPing() {
+                    let pingUrl = window.location.href;
+                    fetch(pingUrl, {
+                        method: 'GET',
+                        cache: 'no-store',
+                        credentials: 'include'
+                    }).then(res => {
+                        let t = new Date().toLocaleTimeString();
+                        console.log('[車輛系統心跳保活] 成功維持連線: ' + t + ' (HTTP ' + res.status + ')');
+                        updateCarBadge(t, '#10b981');
+                    }).catch(() => {
+                        fetch(window.location.origin + '/car/', {
+                            method: 'HEAD',
+                            cache: 'no-store',
+                            credentials: 'include'
+                        }).then(() => {
+                            let t = new Date().toLocaleTimeString();
+                            updateCarBadge(t + ' (備援)', '#38bdf8');
+                        }).catch(() => {});
+                    });
+                }
+
+                if (!window.__car_heartbeat_inpage) {
+                    window.__car_heartbeat_inpage = setInterval(doPing, 180000);
+                }
+                doPing();
+                return "OK";
+            } catch(e) {
+                return "ERR:" + e;
+            }
+        })()
+        """
+        ok, _ = self.car_cdp.evaluate_in_background(js_ping, target_url=target_url)
+        if ok:
+            self.last_car_heartbeat_time = time.time()
+            self.last_car_heartbeat_str = datetime.now().strftime("%H:%M:%S")
+            if hasattr(self, 'lbl_car_status'):
+                prof = self.car_cdp.get_active_profile_mode()
+                self.lbl_car_status.config(
+                    text=f"🟢 車輛系統已登入 [{prof}] ｜ 💓 背景心跳運作中 (最後發送: {self.last_car_heartbeat_str}，每 3 分鐘自動保活)",
+                    foreground="#2E7D32"
+                )
+            if manual:
+                messagebox.showinfo(
+                    "心跳發送成功",
+                    f"💓 已成功向車輛管理系統發送背景防斷線心跳封包！\n\n"
+                    f"• 發送時間：{self.last_car_heartbeat_str}\n"
+                    f"• 自動保活：每 3 分鐘定時於背景維持連線，閒置不會被登出。"
+                )
+        return ok
+
+    def _start_car_cdp_monitor(self):
+        threading.Thread(target=self._car_cdp_monitor_worker, daemon=True).start()
+
+    def _car_cdp_monitor_worker(self):
+        while True:
+            try:
+                running = self.car_cdp.is_running()
+                if running:
+                    target_url = self.get_selected_car_url()
+                    has_tab, is_logged_in, is_login_page, tab_title, tab_url = self.car_cdp.check_car_login_state(target_url)
+                    if has_tab and is_login_page:
+                        pref_acct = self.get_selected_car_account()
+                        assist_res = self.car_cdp.assist_car_login_page(
+                            target_url=target_url,
+                            preferred_account=pref_acct,
+                        )
+                        if isinstance(assist_res, str) and assist_res.startswith("SWITCH:"):
+                            new_acct = assist_res.split("SWITCH:", 1)[1].strip()
+                            if new_acct:
+                                self.root.after(0, lambda a=new_acct: self._apply_switched_car_account(a))
+                                prof = self.get_selected_car_chrome_profile()
+                                force_restart = (new_acct not in self.car_cdp._decrypted_car_creds)
+                                self.car_cdp.launch_or_activate(
+                                    target_url,
+                                    profile_name=prof,
+                                    preferred_account=new_acct,
+                                    force_restart=force_restart,
+                                )
+                    hb_enabled = self.var_car_heartbeat.get() if hasattr(self, 'var_car_heartbeat') else True
+                    if hb_enabled and has_tab and is_logged_in:
+                        now_t = time.time()
+                        if now_t - self.last_car_heartbeat_time >= self.car_heartbeat_interval_sec:
+                            self.send_car_heartbeat(manual=False)
+                    self.root.after(0, lambda ht=has_tab, li=is_logged_in, lp=is_login_page, tt=tab_title: self._update_car_cdp_ui(True, ht, li, lp, tt))
+                else:
+                    self.root.after(0, lambda: self._update_car_cdp_ui(False, False, False, False, ""))
+            except Exception:
+                pass
+            time.sleep(2.0)
+
+    def _update_car_cdp_ui(self, is_online: bool, has_tab: bool, is_logged_in: bool, is_login_page: bool, tab_title: str):
+        if not hasattr(self, 'lbl_car_status') or not hasattr(self, 'btn_car_login'):
+            return
+        active_prof = self.car_cdp.get_active_profile_mode()
+        sel_prof = self.get_selected_car_chrome_profile()
+
+        if not is_online:
+            self.btn_car_login.config(text="🚗 車輛系統登入")
+            self.lbl_car_status.config(
+                text=f"🔴 狀態：尚未啟動（點擊「🚗 車輛系統登入」將以 [{sel_prof}] 開啟並啟動背景心跳）",
+                foreground="#C62828"
+            )
+            return
+
+        if has_tab:
+            if is_logged_in and not is_login_page:
+                hb_enabled = self.var_car_heartbeat.get() if hasattr(self, 'var_car_heartbeat') else True
+                hb_info = f"💓 背景心跳運作中 (最後發送: {self.last_car_heartbeat_str})" if hb_enabled else "⏸️ 背景心跳已暫停"
+                self.btn_car_login.config(text="👁️ 喚醒車輛系統視窗")
+                self.lbl_car_status.config(
+                    text=f"🟢 車輛系統已登入 [{active_prof}] ｜ {hb_info}",
+                    foreground="#2E7D32"
+                )
+            else:
+                self.btn_car_login.config(text="🔑 前往完成車輛登入")
+                self.lbl_car_status.config(
+                    text=f"🟡 車輛系統已開啟 [{active_prof}]：等待登入中（請在 Chrome 視窗登入，登入後自動啟動背景心跳）",
+                    foreground="#E65100"
+                )
+        else:
+            self.btn_car_login.config(text="🚗 開啟車輛系統分頁")
+            self.lbl_car_status.config(
+                text=f"🟡 Chrome [{active_prof}] 已連線（目前無車輛系統分頁，點擊「🚗 開啟車輛系統分頁」自動導向）",
+                foreground="#E65100"
+            )
 
     def browse_roster_file(self):
         """提供直接選取單一勤務表檔案 (.xlsm / .xlsx) 功能"""
@@ -4387,15 +6606,19 @@ class VideoBackupApp:
         roster_p = self.config.get("roster_path", "")
         roster_name = os.path.basename(roster_p) if roster_p else "未指定"
         update_p = self.config.get("update_dir", "")
+        car_url = self.config.get("car_system_url", DEFAULT_CAR_SYSTEM_URL)
+        car_prof = self.config.get("car_chrome_profile", DEFAULT_CAR_CHROME_EMAIL)
         if hasattr(self, 'lbl_save_status'):
             self.lbl_save_status.config(
-                text=f"✅ 設定已儲存！(勤務表: {roster_name}，下拉選單與未錄影原因已同步更新)",
+                text=f"✅ 設定已儲存！(勤務表: {roster_name}，車輛系統與下拉選單已同步更新)",
                 foreground="#2E7D32"
             )
 
         messagebox.showinfo(
             "設定成功",
             "✅ 所有設定已成功儲存！\n\n"
+            f"• 車輛系統網址：{car_url}\n"
+            f"• Chrome 設定檔：{car_prof}\n"
             f"• 自動更新資料夾：{update_p if update_p else '（未指定）'}\n"
             f"• 當月勤務表目錄：{roster_p if roster_p else '（未指定）'}\n"
             "• 設備隨身碟標籤：已更新記憶 (Volume Label 雙重驗證)\n"
