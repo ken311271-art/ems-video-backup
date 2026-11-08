@@ -1,4 +1,5 @@
-@echo off & chcp 65001 >nul & where pythonw >nul 2>nul && (start "" pythonw -x "%~f0" %* & exit) || where python >nul 2>nul && (python -x "%~f0" %* & if errorlevel 1 (echo. & echo [錯誤] 程式執行中斷 & pause) & exit /b) || where py >nul 2>nul && (py -x "%~f0" %* & if errorlevel 1 (echo. & echo [錯誤] 程式執行中斷 & pause) & exit /b) || (echo. & echo [錯誤] 電腦未安裝 Python 3！請至 python.org 安裝 Python 3 (勾選 Add to PATH) 後再開啟。 & pause & exit /b 1)
+@echo off & chcp 65001 >nul & setlocal & set "P=" & where python >nul 2>nul && set "P=python" || (where py >nul 2>nul && set "P=py -3") & if not defined P (echo. & echo 【錯誤】電腦未安裝 Python 3！請至 python.org 安裝 (記得勾選 Add to PATH)。 & pause & exit /b 1) & %P% -x "%~f0" %* & if errorlevel 1 (echo. & echo [提示] 程式執行中斷退出，若上方有報錯訊息請拍照回報。 & pause) & exit /b
+# -*- coding: utf-8 -*-
 import os
 import sys
 import csv
