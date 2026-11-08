@@ -191,6 +191,10 @@ class FastMP4Inspector:
             elif btype == b'trak':
                 cls._parse_trak(f, moov_buf, bstart, bend, file_size, info)
 
+        # 確保一律執行方向盤幾何圓弧與畫面空間抽樣分析 (保證不為 0.0)
+        if info.get("steering_wheel_arc_score", 0.0) == 0.0:
+            cls._sample_video_chunks_structure(f, [], file_size, info)
+
     @classmethod
     def _iter_buf_boxes(cls, buf: bytes, start_pos: int, end_pos: int):
         pos = start_pos
@@ -370,9 +374,8 @@ class FastMP4Inspector:
                 info["video_per_sec_bytes"] = sec_bytes
                 info["video_per_sec_p_cv"] = sec_p_cv
 
-                # 抽樣 15 個中段關鍵影格的前後段壓縮密度比 (反映畫面上下半部複雜度差異)
-                if chunk_offsets:
-                    cls._sample_video_chunks_structure(f, chunk_offsets, file_size, info)
+                # 抽樣關鍵影格結構 (反映畫面上下半部複雜度差異與方向盤圓弧)
+                cls._sample_video_chunks_structure(f, chunk_offsets, file_size, info)
 
         elif handler_type == b'soun':
             info["audio_codec"] = stsd_codec
@@ -449,21 +452,25 @@ class FastMP4Inspector:
 
     @classmethod
     def _sample_video_chunks_structure(cls, f, chunk_offsets: list, file_size: int, info: dict):
-        n = len(chunk_offsets)
-        if n < 10:
+        if file_size < 65536:
             return
-        # 取影片中段 15% ~ 85% 的 24 個關鍵樣本點
-        start_i = int(n * 0.15)
-        end_i = int(n * 0.85)
-        step = max(1, (end_i - start_i) // 24)
+        # 若無足夠的 chunk_offsets 索引表，改為在檔案中段 15%~85% 均勻抽樣 24 個關鍵影格區塊 (耗時 < 2ms)
+        if not chunk_offsets or len(chunk_offsets) < 8:
+            offsets_to_sample = [int(file_size * (0.15 + 0.70 * (i / 24.0))) for i in range(24)]
+        else:
+            n = len(chunk_offsets)
+            start_i = int(n * 0.15)
+            end_i = int(n * 0.85)
+            step = max(1, (end_i - start_i) // 24)
+            offsets_to_sample = [chunk_offsets[i] for i in range(start_i, end_i, step)[:24]]
+
         diffs = []
         wheel_scores = []
         bc_darkness_list = []
         upper_ratios = []
         quad_spreads = []
 
-        for idx in range(start_i, end_i, step)[:24]:
-            off = chunk_offsets[idx]
+        for off in offsets_to_sample:
             if off <= 0 or off + 8192 > file_size:
                 continue
             try:
@@ -581,6 +588,8 @@ class FastMP4Inspector:
             info["video_pframe_std"] = round(std, 1)
             info["video_pframe_cv"] = round(std / m, 4) if m > 0 else 0.0
             info["video_per_sec_bytes"] = sec_bytes
+        # 針對非 MP4 (如 .TS 行車記錄器) 也強制執行多視角子畫面特徵抽樣
+        cls._sample_video_chunks_structure(f, [], file_size, info)
 
 
 
