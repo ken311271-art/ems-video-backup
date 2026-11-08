@@ -1,80 +1,84 @@
 @echo off
-chcp 65001 >nul
 pushd "%~dp0"
-title å¸æ©Ÿæ•‘è­·æ‰‹å°ç­–åˆ†æžå¯¦é©—å®¤
+title ¥q¾÷±ÏÅ@¤â¹ïµ¦¤ÀªR¹êÅç«Ç - ±Ò°Ê»P¶EÂ_
 
-rem 1. æª¢æŸ¥åŒç›®éŒ„ä¸‹æ˜¯å¦å­˜åœ¨ä¸»ç¨‹å¼
-set "TARGET_PYW="
-if exist "%~dp0role_analyzer_lab.pyw" set "TARGET_PYW=%~dp0role_analyzer_lab.pyw"
-if exist "%~dp0role_analyzer_lab.py" if "%TARGET_PYW%"=="" set "TARGET_PYW=%~dp0role_analyzer_lab.py"
+echo ========================================================
+echo  ¥q¾÷±ÏÅ@¤â¹ïµ¦¤ÀªR¹êÅç«Ç - ±Ò°Ê»P¶EÂ_¤u¨ã
+echo ========================================================
+echo.
 
-if "%TARGET_PYW%"=="" (
-    echo.
-    echo =======================================================================
-    echo  ã€éŒ¯èª¤ã€‘æ‰¾ä¸åˆ°ä¸»ç¨‹å¼æª”æ¡ˆ role_analyzer_lab.pywï¼
-    echo =======================================================================
-    echo.
-    echo  åŽŸå› èªªæ˜Žï¼š
-    echo    æ‚¨ç›®å‰åªæœ‰å–®ç¨ä¸‹è¼‰æœ¬ã€Œ.bat å•Ÿå‹•æ·å¾‘ã€ï¼Œç¼ºå°‘äº†ä¸»ç¨‹å¼ã€Œrole_analyzer_lab.pywã€ã€‚
-    echo.
-    echo  ã€è§£æ±ºæ–¹æ³•ï¼ˆä»»é¸ä¸€ç¨®ï¼‰ã€‘ï¼š
-    echo.
-    echo    æ–¹æ³•ä¸€ (å¼·çƒˆæŽ¨è–¦)ï¼š
-    echo      è«‹ç›´æŽ¥ä¸‹è¼‰ã€Œæ•‘è­·å½±åƒæŠ“å–å°å¹«æ‰‹_Windowså°ˆç”¨åŒ….rarã€(æˆ– .zip)ï¼Œ
-    echo      ã€Œæ•´åŒ…è§£å£“ç¸®ã€å¾Œï¼Œç›´æŽ¥é›™æ“Šè£¡é¢çš„ã€Œå•Ÿå‹•å¸æ©Ÿæ•‘è­·æ‰‹å°ç­–åˆ†æž.batã€å³å¯ï¼
-    echo.
-    echo    æ–¹æ³•äºŒ (å–®æª”æ”¾ä¸€èµ·)ï¼š
-    echo      è«‹å›žåˆ°ä¸‹è¼‰å€åŒæ™‚ä¸‹è¼‰ã€Œrole_analyzer_lab.pywã€ï¼Œ
-    echo      ä¸¦å°‡å®ƒèˆ‡æœ¬ .bat æª”æ”¾åœ¨ã€ŒåŒä¸€å€‹è³‡æ–™å¤¾ã€ï¼
-    echo.
-    echo    æ–¹æ³•ä¸‰ (å…è§£å£“å–®æª”ç‰ˆ)ï¼š
-    echo      è«‹ä¸‹è¼‰ã€Œå¸æ©Ÿæ•‘è­·æ‰‹å°ç­–åˆ†æž_å–®æª”ç¨ç«‹ç‰ˆ.batã€ï¼Œ
-    echo      é‚£æ˜¯æŠŠæ•´å€‹ä¸»ç¨‹å¼åŒ…åœ¨è£¡é¢çš„å–®ä¸€æª”æ¡ˆï¼Œä¸‹è¼‰å¾Œç›´æŽ¥é»žå³å¯ï¼
-    echo.
-    echo =======================================================================
-    echo.
+rem 1. ÀË¬d¥Dµ{¦¡ÀÉ®×
+set "TARGET_PY="
+if exist "%~dp0role_analyzer_lab.pyw" set "TARGET_PY=%~dp0role_analyzer_lab.pyw"
+if exist "%~dp0role_analyzer_lab.py" if "%TARGET_PY%"=="" set "TARGET_PY=%~dp0role_analyzer_lab.py"
+
+if "%TARGET_PY%"=="" (
+    echo [X ²§±`] §ä¤£¨ì¥Dµ{¦¡ÀÉ®× role_analyzer_lab.pyw¡I
+    echo --------------------------------------------------------
+    echo ½Ð½T»{¥»§å¦¸ÀÉ»P role_analyzer_lab.pyw ©ñ¦b¦P¤@­Ó¸ê®Æ§¨¡C
+    echo ­Y±z¬O³æ¿W¤U¸ü¡A«ØÄ³¤U¸ü¡u±ÏÅ@¼v¹³§ì¨ú¤pÀ°¤â_Windows±M¥Î¥].rar¡v¨Ã¸ÑÀ£ÁY¨Ï¥Î¡C
+    echo ========================================================
     pause
     popd
     exit /b 1
 )
+echo [V ¥¿±`] ¤w©w¦ì¥Dµ{¦¡¡G%TARGET_PY%
 
-rem 2. æª¢æŸ¥ Python ç’°å¢ƒ
+rem 2. ÀË´ú Python Àô¹Ò
+echo.
+echo ¥¿¦bÀË´ú Python °õ¦æÀô¹Ò...
 set "PY_CMD="
-where pythonw >nul 2>nul && set "PY_CMD=pythonw"
-if "%PY_CMD%"=="" where python >nul 2>nul && set "PY_CMD=python"
-if "%PY_CMD%"=="" where py >nul 2>nul && set "PY_CMD=py"
+where python >nul 2>nul && set "PY_CMD=python"
+if "%PY_CMD%"=="" where py >nul 2>nul && set "PY_CMD=py -3"
 
 if "%PY_CMD%"=="" (
     echo.
-    echo =======================================================================
-    echo  ã€éŒ¯èª¤ã€‘é›»è…¦æœªå®‰è£ Python 3ï¼
-    echo =======================================================================
+    echo [X ²§±`] ¹q¸£§ä¤£¨ì Python «ü¥O¡I
+    echo --------------------------------------------------------
+    echo ¥i¯à­ì¦]¡G
+    echo 1. ¦w¸Ë Python ®É¥¼¤Ä¿ï¡uAdd python.exe to PATH¡v¡C
+    echo 2. ¹q¸£©|¥¼¦w¸Ë Python 3¡C
     echo.
-    echo  è«‹è‡³ Python å®˜ç¶² (https://www.python.org) å®‰è£ Python 3ã€‚
-    echo  â˜… å®‰è£æ™‚è«‹å‹™å¿…å‹¾é¸æœ€ä¸‹æ–¹çš„ï¼šã€Add python.exe to PATHã€‘ï¼
-    echo.
-    echo =======================================================================
-    echo.
+    echo ½Ð¦Ü https://www.python.org ¤U¸ü¦w¸Ë Python 3¡A
+    echo ¦w¸Ë®É½Ð°È¥²¤Ä¿ï³Ì¤U¤èªº¡uAdd python.exe to PATH¡v¡I
+    echo ========================================================
     pause
     popd
     exit /b 1
 )
+echo [V ¥¿±`] Python Àô¹Ò¥¿±`¡I
 
-rem 3. å•Ÿå‹•ä¸»ç¨‹å¼
-if "%PY_CMD%"=="pythonw" (
-    start "" pythonw "%TARGET_PYW%"
+rem 3. ÀË´ú Tkinter µøµ¡®M¥ó
+echo.
+echo ¥¿¦bÀË´úµøµ¡¤¸¥ó¤ä´© (Tkinter)...
+%PY_CMD% -c "import tkinter" >nul 2>nul
+if %errorlevel% neq 0 (
+    echo.
+    echo [X ²§±`] ±zªº Python ¯Ê¤Ö Tkinter µøµ¡¤¸¥ó¡I
+    echo --------------------------------------------------------
+    echo ½Ð­«·s°õ¦æ Python ¦w¸Ëµ{¦¡¡AÂI¿ï Modify ¨Ã¤Ä¿ï tcl/tk¡C
+    echo ========================================================
+    pause
     popd
-    exit
-) else (
-    "%PY_CMD%" "%TARGET_PYW%"
-    if %errorlevel% neq 0 (
-        echo.
-        echo =======================================================================
-        echo  ç¨‹å¼åŸ·è¡Œæ™‚ç™¼ç”Ÿç•°å¸¸ï¼Œè«‹åƒè€ƒä¸Šæ–¹éŒ¯èª¤è¨Šæ¯ã€‚
-        echo =======================================================================
-        echo.
-        pause
-    )
-    popd
-    exit /b
+    exit /b 1
 )
+echo [V ¥¿±`] µøµ¡¤¸¥ó¤ä´©¥¿±`¡I
+
+rem 4. ±Ò°Ê¥Dµ{¦¡
+echo.
+echo ¥¿¦b±Ò°Ê¥q¾÷±ÏÅ@¤â¹ïµ¦¤ÀªR¥Dµ{¦¡...
+echo (­Yµ{¦¡¦³¥ô¦ó³ø¿ù°T®§·|«O¯d¦b¤U¤è)
+echo --------------------------------------------------------
+%PY_CMD% "%TARGET_PY%" %*
+if %errorlevel% neq 0 (
+    echo.
+    echo ========================================================
+    echo [!] µ{¦¡¤¤Â_°h¥X (¥N½X: %errorlevel%)
+    echo     ­Y¤W¤è¦³Åã¥Ü­^¤å³ø¿ù°T®§¡A½Ð©ç·Ó©Î½Æ»s´£¨Ñµ¹ºûÅ@¤H­û¡C
+    echo ========================================================
+    echo.
+    pause
+)
+
+popd
+exit /b

@@ -1,4 +1,49 @@
-@echo off & chcp 65001 >nul & setlocal & set "P=" & where python >nul 2>nul && set "P=python" || (where py >nul 2>nul && set "P=py -3") & if not defined P (echo. & echo 【錯誤】電腦未安裝 Python 3！請至 python.org 安裝 (記得勾選 Add to PATH)。 & pause & exit /b 1) & %P% -x "%~f0" %* & if errorlevel 1 (echo. & echo [提示] 程式執行中斷退出，若上方有報錯訊息請拍照回報。 & pause) & exit /b
+@echo off
+rem = """
+pushd "%~dp0"
+title 司機救護手對策分析實驗室
+
+where python >nul 2>nul
+if %errorlevel% equ 0 (
+    python -x "%~f0" %*
+    goto :done
+)
+
+where py >nul 2>nul
+if %errorlevel% equ 0 (
+    py -3 -x "%~f0" %*
+    goto :done
+)
+
+echo.
+echo =======================================================================
+echo  [X 錯誤] 電腦未安裝 Python 3！
+echo =======================================================================
+echo.
+echo  請至 Python 官網 (https://www.python.org) 下載安裝 Python 3。
+echo  ★ 安裝時請務必在第一個畫面勾選最下方的：【Add python.exe to PATH】！
+echo.
+echo =======================================================================
+echo.
+pause
+goto :exit_point
+
+:done
+if %errorlevel% neq 0 (
+    echo.
+    echo =======================================================================
+    echo  [!] 程式執行中斷退出 (代碼: %errorlevel%)
+    echo      若上方有顯示錯誤訊息，請截圖拍照回報。
+    echo =======================================================================
+    echo.
+    pause
+)
+
+:exit_point
+popd
+exit /b
+
+rem """
 # -*- coding: utf-8 -*-
 import os
 import sys
