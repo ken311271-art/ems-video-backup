@@ -248,7 +248,12 @@ class FastMP4Inspector:
                 if btype in (b'mdia', b'minf', b'stbl'):
                     stack.append((bs, be))
                 elif btype == b'hdlr':
-                    if be - bs >= 12:
+                    h_chunk = buf[bs:be]
+                    if b'vide' in h_chunk:
+                        handler_type = b'vide'
+                    elif b'soun' in h_chunk:
+                        handler_type = b'soun'
+                    elif be - bs >= 12:
                         handler_type = buf[bs + 8:bs + 12]
                 elif btype == b'mdhd':
                     ver = buf[bs] if be > bs else 0
@@ -257,7 +262,11 @@ class FastMP4Inspector:
                     elif ver == 1 and be - bs >= 32:
                         _, _, timescale, track_dur = struct.unpack_from(">QQIQ", buf, bs + 4)
                 elif btype == b'stsd':
-                    if be - bs >= 16:
+                    for cand in (b'avc1', b'hvc1', b'hev1', b'mp4v', b'mp4a', b'aac ', b'samr', b'alaw', b'ulaw', b'pcm '):
+                        if cand in buf[bs:be]:
+                            stsd_codec = cand.decode('latin1', errors='ignore').strip()
+                            break
+                    if not stsd_codec and be - bs >= 16:
                         stsd_codec = buf[bs + 12:bs + 16].decode('latin1', errors='ignore').strip()
                 elif btype == b'stsz':
                     if be - bs >= 12:
