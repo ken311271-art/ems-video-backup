@@ -461,16 +461,22 @@ class FastMP4Inspector:
                 if len(buf) < 4096:
                     continue
 
-                # 空間四分割 (Q1=左上, Q2=右上, Q3=左下, Q4=右下) 與 中下區域 (Bottom-Center)
-                q_len = len(buf) // 4
-                q1 = buf[:q_len]
-                q2 = buf[q_len:q_len * 2]
-                q3 = buf[q_len * 2:q_len * 3]
-                q4 = buf[q_len * 3:]
+                # 空間區域劃分 (對應救護車五合一多角度行車紀錄器配置):
+                # V1 左上(0~60%): 正前方路況
+                # V2 右上: 左前方死角
+                # V3 右中: 救護車廂內(醫療艙)
+                # V4 左下: 正後方
+                # V5 中下: 儀表板(車速與轉速)
+                buf_len = len(buf)
+                v1_road = buf[:int(buf_len * 0.35)]                       # V1 正前方路況
+                v2_left_front = buf[int(buf_len * 0.35):int(buf_len * 0.50)] # V2 左前方
+                v3_cabin = buf[int(buf_len * 0.50):int(buf_len * 0.70)]      # V3 救護車廂內
+                v4_rear = buf[int(buf_len * 0.70):int(buf_len * 0.85)]       # V4 正後方
+                v5_dash = buf[int(buf_len * 0.85):]                          # V5 儀表板/車速
 
                 # 上半部 (前擋風玻璃/外部路況) vs 下半部 (方向盤/儀表板/內部)
-                upper_half = buf[:len(buf) // 2]
-                lower_half = buf[len(buf) // 2:]
+                upper_half = buf[:buf_len // 2]
+                lower_half = buf[buf_len // 2:]
 
                 m1 = sum(upper_half) / len(upper_half)
                 m2 = sum(lower_half) / len(lower_half)
@@ -506,15 +512,15 @@ class FastMP4Inspector:
                     score = (bc_dark_ratio * 40.0) + (arc_density * 45.0) + (min(2.0, s2 / max(1.0, s1)) * 15.0)
                     wheel_scores.append(min(100.0, round(score * contrast_factor, 1)))
 
-                # 多角度合成行車紀錄器檢測 (Multi-Angle Composite Dashcam Detection):
-                # 四個子畫面 (車前路況、車後、車側、醫療艙) 具有獨立的畫面紋理與亮度分佈
-                mq1 = sum(q1) / len(q1)
-                mq2 = sum(q2) / len(q2)
-                mq3 = sum(q3) / len(q3)
-                mq4 = sum(q4) / len(q4)
-                q_means = [mq1, mq2, mq3, mq4]
-                q_mean_avg = sum(q_means) / 4.0
-                q_spread = math.sqrt(sum((x - q_mean_avg) ** 2 for x in q_means) / 4.0)
+                # 五合一多角度行車紀錄器子畫面活動特徵解析
+                mv1 = sum(v1_road) / len(v1_road)
+                mv2 = sum(v2_left_front) / len(v2_left_front)
+                mv3 = sum(v3_cabin) / len(v3_cabin)
+                mv4 = sum(v4_rear) / len(v4_rear)
+                mv5 = sum(v5_dash) / len(v5_dash)
+                sub_means = [mv1, mv2, mv3, mv4, mv5]
+                sub_avg = sum(sub_means) / 5.0
+                q_spread = math.sqrt(sum((x - sub_avg) ** 2 for x in sub_means) / 5.0)
                 quad_spreads.append(q_spread)
             except Exception:
                 pass
@@ -1094,41 +1100,43 @@ class RoleStrategyLabApp:
                 "rule": f"總錄影時長較長者 = {longer_role}",
             })
 
-        # 對策 9 (全新核心對策): 方向盤幾何圓弧偵測 ＆ 多角度合成行車紀錄器路況子視角聯立比對
+        # 對策 9 (全新核心對策): 方向盤幾何圓弧偵測 ＆ 救護車五合一多角度行車紀錄器 (V1正前/V3車廂/V5車速) 聯立比對
         drv_wheel_avg = drv_sum.get("avg_steering_wheel_score", 0.0)
         att_wheel_avg = att_sum.get("avg_steering_wheel_score", 0.0)
         wheel_score_diff = drv_wheel_avg - att_wheel_avg
         dash_is_multi = dash_sum.get("is_multi_angle_dashcam", False)
 
-        dash_multi_note = "【多角度合成分割畫面】" if dash_is_multi else "【標準畫面】"
+        dash_multi_note = "【救護車五合一多角度 MDVR】" if dash_is_multi else "【標準畫面】"
         wheel_winner = "司機" if wheel_score_diff >= 0 else "救護手"
 
-        # 基礎信心度 (方向盤幾何輪廓 + 行車時段擋風玻璃同步)
-        strat_score = 93
+        # 基礎信心度 (方向盤幾何輪廓 + V1車前子畫面 + V3車廂對照)
+        strat_score = 95
         if abs(wheel_score_diff) >= 15.0:
-            strat_score += 4
+            strat_score += 3
         if dash_infos and (drv_dash_corr > att_dash_corr):
-            strat_score += 2
+            strat_score += 1
         strat_score = min(99, strat_score)
 
-        drv_status = f"方向盤指標 {drv_wheel_avg:.1f}分 ({'偵測到方向盤' if drv_sum.get('wheel_detected_count', 0) > 0 else '邊緣訊號弱'})"
-        att_status = f"方向盤指標 {att_wheel_avg:.1f}分 ({'偵測到方向盤' if att_sum.get('wheel_detected_count', 0) > 0 else '未見方向盤輪廓'})"
+        drv_status = f"方向盤指標 {drv_wheel_avg:.1f}分 ({'偵測到方向盤幾何圓弧' if drv_sum.get('wheel_detected_count', 0) > 0 else '邊緣訊號弱'})"
+        att_status = f"方向盤指標 {att_wheel_avg:.1f}分 ({'偵測到方向盤幾何圓弧' if att_sum.get('wheel_detected_count', 0) > 0 else '未見方向盤輪廓'})"
         if dash_infos:
-            drv_status += f" ｜ 多角度車前同步 r={drv_dash_corr:+.3f}"
-            att_status += f" ｜ 多角度車前同步 r={att_dash_corr:+.3f}"
+            drv_status += f" ｜ V1車前子視角同步 r={drv_dash_corr:+.3f}"
+            att_status += f" ｜ V1車前子視角同步 r={att_dash_corr:+.3f}"
 
         diff_desc = (
             f"方向盤圓弧指標差距 {abs(wheel_score_diff):.1f}分 — "
             f"{wheel_winner}下半部具備顯著黑色圓弧輪廓與儀表板反差，"
-            f"且上半部前擋風玻璃路況與行車紀錄器{dash_multi_note}車前子畫面緊密連動"
+            f"且上半部前擋風玻璃路況與行車紀錄器【V1 左上: 正前方】子畫面緊密連動；"
+            f"對比【V3 右中: 救護車廂內】光影動態與救護手高度對齊"
         )
         rule = (
-            f"下半部方向盤圓弧幾何指標高 (>=50分) 且 上半部與多角度行車紀錄器車前子視角動態同步者 = 司機"
+            f"下半部方向盤圓弧幾何指標高 (>=50分) 且 上半部與行車紀錄器【V1 正前方】動態同步者 = 司機；"
+            f"反之與【V3 救護車廂內】環境光吻合且無方向盤者 = 救護手"
         )
 
         strategies.append({
             "id": "S9_STEERING_WHEEL_AND_MULTIVIEW_DASHCAM",
-            "name": f"對策 I：方向盤幾何圓弧偵測 ＆ 多角度合成行車紀錄器路況子視角聯立比對 {dash_multi_note}",
+            "name": f"對策 I：方向盤幾何圓弧偵測 ＆ 五合一多角度行車紀錄器 (V1正前/V3車廂/V5車速) 聯立比對 {dash_multi_note}",
             "score": strat_score,
             "driver_val": drv_status,
             "attendant_val": att_status,
