@@ -819,114 +819,83 @@ def summarize_group(infos: list) -> dict:
 def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict = None,
                                       corr1: float = 0.0, corr2: float = 0.0) -> tuple:
     """
-    客觀物理多特徵聯立計分演算法 (純 Python 標準庫，100% 依據物理真實時序與空間載具重合)
+    分隊勤務客觀物理多特徵聯立計分演算法 (純 Python 標準庫，100% 依據消防分隊真實勤務 SOP 與物理空間特性)
+    - 依分隊規定：救護手一定要錄影存證後艙處置，司機可有可無；
+    - 開機時間差：個人習慣各異，不計入勝負分 (0分)；
+    - 到院急診關機時序：司機推床完成後較早關機；救護手檢傷處置病患容易延遲/忘記關機 (權重 35分)；
+    - 送醫動態與車前行車紀錄器同步率：司機正視前方路況同動相關 (權重 25分)；
+    - 車艙空間垂直光暗對比度：司機前擋亮光/儀表暗部反差顯著 vs 後艙頂燈均勻漫射 (權重 15分)；
+    - 音訊環境特徵：後艙照護密集問診高語音活動 vs 前座專注駕駛少通話 (權重 15分)。
     回傳: (score1, score2, reasons1, reasons2)
     """
     score1 = 50.0
     score2 = 50.0
     r1, r2 = [], []
 
-    # 1. 行車紀錄器時空聯立 (車輛發動與車庫熄火時間邊界)
-    if dash_sum and dash_sum.get("last_end_ts", 0) > 0 and dash_sum.get("first_start_ts", 0) > 0:
-        ds = dash_sum["first_start_ts"]
-        de = dash_sum["last_end_ts"]
-        ddur = max(1.0, de - ds)
-
-        # A. 開機與車輛發動點吻合度 (司機先至車庫發動出勤)
-        d_s1 = abs(c1_sum.get("first_start_ts", 0) - ds)
-        d_s2 = abs(c2_sum.get("first_start_ts", 0) - ds)
-        if abs(d_s1 - d_s2) >= 15:
-            delta_s = abs(d_s1 - d_s2)
-            pts = min(20.0, round(delta_s * 0.1, 1))
-            if d_s1 < d_s2:
-                score1 += pts
-                r1.append(f"開機貼近車輛發動 (近 {int(delta_s)}秒)")
-            else:
-                score2 += pts
-                r2.append(f"開機貼近車輛發動 (相近 {int(delta_s)}秒)")
-
-        # B. 關機與車輛熄火點吻合度 (司機倒車入庫、手煞車巡車後關機)
-        d_e1 = abs(c1_sum.get("last_end_ts", 0) - de)
-        d_e2 = abs(c2_sum.get("last_end_ts", 0) - de)
-        if abs(d_e1 - d_e2) >= 20:
-            delta_e = abs(d_e1 - d_e2)
-            pts = min(15.0, round(delta_e * 0.06, 1))
-            if d_e1 < d_e2:
-                score1 += pts
-                r1.append("返隊關機貼近車庫熄火時點")
-            else:
-                score2 += pts
-                r2.append("返隊關機貼近車庫熄火時點")
-
-        # C. 與行車紀錄器行駛時段重合度 (司機全程駕駛車輛)
-        ov1 = max(0.0, min(c1_sum.get("last_end_ts", 0), de) - max(c1_sum.get("first_start_ts", 0), ds))
-        ov2 = max(0.0, min(c2_sum.get("last_end_ts", 0), de) - max(c2_sum.get("first_start_ts", 0), ds))
-        ov1_r = ov1 / ddur
-        ov2_r = ov2 / ddur
-        if abs(ov1_r - ov2_r) >= 0.05:
-            if ov1_r > ov2_r:
-                score1 += min(15.0, round((ov1_r - ov2_r) * 30.0, 1))
-                r1.append(f"車程時段覆蓋率較高 ({ov1_r * 100:.0f}%)")
-            else:
-                score2 += min(15.0, round((ov2_r - ov1_r) * 30.0, 1))
-                r2.append(f"車程時段覆蓋率較高 ({ov2_r * 100:.0f}%)")
-
-        # D. 行車動態同步率 (若有每秒封包相關係數)
-        corr_diff = corr1 - corr2
-        if abs(corr_diff) >= 0.04:
-            if corr_diff > 0:
-                score1 += min(10.0, round(corr_diff * 25.0, 1))
-                r1.append(f"行車動態關聯較高 (r={corr1:+.3f})")
-            else:
-                score2 += min(10.0, round(-corr_diff * 25.0, 1))
-                r2.append(f"行車動態關聯較高 (r={corr2:+.3f})")
-
-    # 2. 出勤起跑第一段開機時間差 (派遣廣播 -> 衝車庫發動)
-    start_diff = c2_sum.get("first_start_ts", 0) - c1_sum.get("first_start_ts", 0)
-    if abs(start_diff) >= 15:
-        delta_st = abs(start_diff)
-        pts = min(25.0, round(delta_st * 0.12, 1))
-        if start_diff > 0:
-            score1 += pts
-            r1.append(f"出勤早 {int(delta_st)}秒 開機發動")
-        else:
-            score2 += pts
-            r2.append(f"出勤早 {int(delta_st)}秒 開機發動")
-
-    # 3. 返隊最後關機時間差 (入庫巡車作業)
+    # 1. 急診室到院交接關機時序 (救護手交接處置容易延遲/忘記關機；司機推床後先關機) [最高 35分]
     end_diff = c1_sum.get("last_end_ts", 0) - c2_sum.get("last_end_ts", 0)
-    if abs(end_diff) >= 30:
+    if abs(end_diff) >= 20:
         delta_et = abs(end_diff)
-        pts = min(15.0, round(delta_et * 0.04, 1))
-        if end_diff > 0:
+        pts = min(35.0, round(delta_et * 0.1, 1))
+        if end_diff < 0:
+            # c1 較早關機 (司機推床後完成車輛交接)，c2 較晚關機 (救護手急診檢傷交接忘記關機)
             score1 += pts
-            r1.append(f"返隊晚 {int(delta_et)}秒 關機完成入庫")
+            r1.append(f"到院完成推床後較早關機 (早 {int(delta_et)}秒 完成車輛交接)")
+            r2.append(f"急診檢傷延遲關機 (晚 {int(delta_et)}秒，交接處置病患)")
         else:
+            # c2 較早關機，c1 較晚關機
             score2 += pts
-            r2.append(f"返隊晚 {int(delta_et)}秒 關機完成入庫")
+            r2.append(f"到院完成推床後較早關機 (早 {int(delta_et)}秒 完成車輛交接)")
+            r1.append(f"急診檢傷延遲關機 (晚 {int(delta_et)}秒，交接處置病患)")
 
-    # 4. 出勤全程錄影時長 (駕駛全程涵蓋)
-    dur_diff = c1_sum.get("total_duration_sec", 0) - c2_sum.get("total_duration_sec", 0)
-    if abs(dur_diff) >= 45:
-        delta_dur = abs(dur_diff)
-        pts = min(15.0, round(delta_dur * 0.04, 1))
-        if dur_diff > 0:
-            score1 += pts
-            r1.append(f"出勤時長多 {int(delta_dur)}秒 涵蓋全程")
-        else:
-            score2 += pts
-            r2.append(f"出勤時長多 {int(delta_dur)}秒 涵蓋全程")
+    # 2. 車艙空間垂直光暗對比度 (司機前擋天空亮/儀表暗 vs 救護艙均勻日光燈漫射) [最高 15分]
+    tb1 = c1_sum.get("avg_iframe_tb_diff", 0.0)
+    tb2 = c2_sum.get("avg_iframe_tb_diff", 0.0)
+    if tb1 > 0 and tb2 > 0:
+        tb_diff = tb1 - tb2
+        if abs(tb_diff) >= 0.05:
+            delta_tb = abs(tb_diff)
+            pts = min(15.0, round(delta_tb * 12.0, 1))
+            if tb_diff > 0:
+                score1 += pts
+                r1.append(f"前擋光影垂直反差顯著 (反差={tb1:.2f})")
+                r2.append(f"救護艙均勻頂燈漫射 (反差={tb2:.2f})")
+            else:
+                score2 += pts
+                r2.append(f"前擋光影垂直反差顯著 (反差={tb2:.2f})")
+                r1.append(f"救護艙均勻頂燈漫射 (反差={tb1:.2f})")
 
-    # 5. 音訊環境特徵 (前座警笛胎噪 vs 後艙問診人聲)
+    # 3. 送醫行駛時段與車前行車紀錄器動態同步率 (司機正視前方路況同動) [最高 25分]
+    if dash_sum and (corr1 != 0.0 or corr2 != 0.0):
+        corr_diff = corr1 - corr2
+        if abs(corr_diff) >= 0.03:
+            pts = min(25.0, round(abs(corr_diff) * 40.0, 1))
+            if corr_diff > 0:
+                score1 += pts
+                r1.append(f"車前動態高度同步 (r={corr1:+.3f})")
+                r2.append(f"後艙視角動態與車前無關 (r={corr2:+.3f})")
+            else:
+                score2 += pts
+                r2.append(f"車前動態高度同步 (r={corr2:+.3f})")
+                r1.append(f"後艙視角動態與車前無關 (r={corr1:+.3f})")
+
+    # 4. 音訊環境特徵 (前座專注駕駛少通話 vs 後艙照護密集問診) [最高 15分]
     z1 = c1_sum.get("avg_audio_zcr", 0.0)
     z2 = c2_sum.get("avg_audio_zcr", 0.0)
-    if abs(z1 - z2) >= 0.02:
+    if (z1 > 0 or z2 > 0) and abs(z1 - z2) >= 0.02:
+        pts = 10.0
+        # 救護艙內救護手問診語音活動豐富；司機前座專注駕駛收音平穩
         if z1 > z2:
-            score1 += 8.0
-            r1.append("前座高頻零交越率較高 (警笛/引擎胎噪)")
+            score2 += pts  # c2 司機加分
+            r2.append("前座駕駛專注少話 (收音平穩)")
+            r1.append("後艙照護密集問診 (高語音活動)")
         else:
-            score2 += 8.0
-            r2.append("前座高頻零交越率較高 (警笛/引擎胎噪)")
+            score1 += pts  # c1 司機加分
+            r1.append("前座駕駛專注少話 (收音平穩)")
+            r2.append("後艙照護密集問診 (高語音活動)")
+
+    # 5. 出勤第一段開機時間差 (依分隊習慣：救護手拿給司機，誰先開機吃個人習慣，不計入勝負 0分)
+    # 不增減分數，避免被個人習慣偏誤誤導
 
     score1 = min(100.0, round(score1, 1))
     score2 = min(100.0, round(score2, 1))
@@ -968,7 +937,7 @@ def evaluate_two_officers(drv_infos: list, att_infos: list, dash_infos: list, el
     c1_driving_cv = series_cv(c1_driving_series)
     c2_driving_cv = series_cv(c2_driving_series)
 
-    # 執行客觀物理多特徵聯立計算
+    # 執行客觀物理多特徵聯立計算 (依分隊現場勤務真實 SOP)
     score1, score2, r1, r2 = compute_objective_physical_scores(
         c1_sum, c2_sum, dash_sum, c1_dash_corr, c2_dash_corr
     )
@@ -1018,123 +987,100 @@ def evaluate_two_officers(drv_infos: list, att_infos: list, dash_infos: list, el
 
     strategies = []
 
-    # 👑 核心首選｜對策 A：客觀物理多特徵聯立裁決
-    lead_reasons_str = "、".join(drv_reasons[:2]) if drv_reasons else "出勤發動與車輛時程高度吻合"
+    # 👑 核心首選｜對策 A：分隊勤務客觀物理多特徵聯立裁決
+    lead_reasons_str = "、".join(drv_reasons[:2]) if drv_reasons else "到院推床後較早關機且車艙光影符合前座"
     strategies.append({
         "id": "S0_OBJECTIVE_PHYSICAL_JOINT",
-        "name": "👑 核心首選｜對策 A：客觀物理多特徵聯立裁決 (行車紀錄器啟閉吻合 ＆ 出勤起步時序 ＆ 任務跨度)",
+        "name": "👑 核心首選｜對策 A：分隊勤務客觀物理多特徵聯立裁決 (急診交接關機 ＆ 車艙光暗反差 ＆ 動態同動)",
         "score": 100,
         "driver_val": f"客觀物理綜合得分 {drv_score:.1f} 分 (高度符合駕駛員行為)",
-        "attendant_val": f"客觀物理綜合得分 {att_score:.1f} 分 (符合副手/救護艙時程特徵)",
-        "diff_desc": f"物理綜合分差 {lead_score:.1f} 分 — 【{final_drv_name}】{lead_reasons_str}；【{final_att_name}】呈現副手/救護艙特徵",
-        "rule": "聯立比對車輛發動/熄火時間邊界、出勤起步時差與任務時程跨度，多維客觀物理事實裁決 (不受個人習慣單一偏誤干擾)",
+        "attendant_val": f"客觀物理綜合得分 {att_score:.1f} 分 (符合救護手/後艙時程特徵)",
+        "diff_desc": f"物理綜合分差 {lead_score:.1f} 分 — 【{final_drv_name}】{lead_reasons_str}；【{final_att_name}】呈現後艙照護特徵",
+        "rule": "嚴格依據分隊勤務 SOP：聯立急診交接關機時序、送醫後艙問診、車艙垂直光暗反差與車前動態，多維客觀物理裁決 (不受個人開機習慣干擾)",
     })
 
-    # 對策 B: 行車紀錄器 (MDVR) 車輛發動/熄火時間軸聯立吻合度 (若有行車紀錄器)
-    if dash_sum and dash_sum.get("last_end_ts", 0) > 0 and dash_sum.get("first_start_ts", 0) > 0:
-        ds = dash_sum["first_start_ts"]
-        de = dash_sum["last_end_ts"]
-        ddur = max(1.0, de - ds)
-        d_s_drv = abs(final_drv_sum.get("first_start_ts", 0) - ds)
-        d_s_att = abs(final_att_sum.get("first_start_ts", 0) - ds)
-        d_e_drv = abs(final_drv_sum.get("last_end_ts", 0) - de)
-        d_e_att = abs(final_att_sum.get("last_end_ts", 0) - de)
-        ov_drv = max(0.0, min(final_drv_sum.get("last_end_ts", 0), de) - max(final_drv_sum.get("first_start_ts", 0), ds))
-        ov_att = max(0.0, min(final_att_sum.get("last_end_ts", 0), de) - max(final_att_sum.get("first_start_ts", 0), ds))
-        ov_drv_r = ov_drv / ddur
-        ov_att_r = ov_att / ddur
-        strategies.append({
-            "id": "S1_DASHCAM_ALIGNMENT",
-            "name": "對策 B：行車紀錄器 (MDVR) 車輛發動/熄火時間軸聯立吻合度",
-            "score": 95,
-            "driver_val": f"車程重合率 {ov_drv_r * 100:.1f}% ｜ 發動差 {d_s_drv:.0f}秒 ｜ 熄火差 {d_e_drv:.0f}秒",
-            "attendant_val": f"車程重合率 {ov_att_r * 100:.1f}% ｜ 發動差 {d_s_att:.0f}秒 ｜ 熄火差 {d_e_att:.0f}秒",
-            "diff_desc": f"【{final_drv_name}】密錄器開關機時段與救護車車輛電門發動、車庫熄火及行駛時段吻合度顯著較高",
-            "rule": "救護車為駕駛員專屬操作載具，車輛出勤發動與返隊熄火時間邊界高度相近者 = 司機",
-        })
-
-    # 對策 C: 出勤第一段開機起步時間差
-    start_diff_sec = round(final_att_sum["first_start_ts"] - final_drv_sum["first_start_ts"], 1)
-    if abs(start_diff_sec) >= 10:
-        who_first = f"司機({final_drv_name})先開機" if start_diff_sec > 0 else f"救護手({final_att_name})先開機"
-        strategies.append({
-            "id": "S2_START_TIME_DELTA",
-            "name": "對策 C：出勤第一段開機時間差 [派遣出動反應時序]",
-            "score": min(88, int(abs(start_diff_sec) * 0.5) + 30),
-            "driver_val": final_drv_sum["first_start_str"],
-            "attendant_val": final_att_sum["first_start_str"],
-            "diff_desc": f"相差 {abs(start_diff_sec):.0f} 秒 — {who_first} (率先開機衝往車庫發動出勤)",
-            "rule": "接獲派遣廣播後，率先開機衝往車庫發動救護車者 = 司機 (時差 < 15 秒視為同時出勤)",
-        })
-
-    # 對策 D: 返隊最後關機時間差 (到院交接 / 入庫巡車)
-    end_diff_sec = round(final_drv_sum["last_end_ts"] - final_att_sum["last_end_ts"], 1)
+    # 對策 B: 急診室到院交接關機時序 (救護手交接易延遲/忘記關機)
+    end_diff_sec = round(final_att_sum["last_end_ts"] - final_drv_sum["last_end_ts"], 1)
     if abs(end_diff_sec) >= 20:
-        who_later = f"司機({final_drv_name})較晚關機" if end_diff_sec > 0 else f"救護手({final_att_name})較晚關機"
+        who_later = f"救護手({final_att_name})晚關機" if end_diff_sec > 0 else f"司機({final_drv_name})晚關機"
         strategies.append({
-            "id": "S3_END_TIME_DELTA",
-            "name": "對策 D：返隊最後關機與急診交接時間差",
-            "score": min(80, int(abs(end_diff_sec) / 10) + 20),
+            "id": "S1_END_TIME_DELTA",
+            "name": "對策 B：急診室到院交接關機時序 [救護手交接處置易延遲/忘記關機]",
+            "score": 95,
             "driver_val": final_drv_sum["last_end_str"],
             "attendant_val": final_att_sum["last_end_str"],
-            "diff_desc": f"相差 {abs(end_diff_sec):.0f} 秒 ({abs(end_diff_sec) / 60:.1f} 分鐘) — {who_later}",
-            "rule": "司機於救護車返隊車庫停妥入庫、拉手煞車巡車後關機；副手常於急診室交接或車廂整理完畢後關機",
+            "diff_desc": f"相差 {abs(end_diff_sec):.0f} 秒 ({abs(end_diff_sec) / 60:.1f} 分鐘) — {who_later} (在急診檢傷區交接處置病患易延遲關機)",
+            "rule": "到院推床後，司機任務告一段落較早關機；救護手於急診室檢傷台持續照護病患與交接病情，容易延遲/忘記關機。較晚關機者 = 救護手",
         })
 
-    # 對策 E: 出勤影片全程覆蓋跨度與總時長
-    dur_diff_sec = round(final_drv_sum["total_duration_sec"] - final_att_sum["total_duration_sec"], 1)
-    if abs(dur_diff_sec) >= 30:
-        longer_role = f"司機({final_drv_name})" if dur_diff_sec > 0 else f"救護手({final_att_name})"
+    # 對策 C: 畫面空間光暗對比 (擋風玻璃光影 vs 車廂均勻照明)
+    tb_diff = final_drv_sum.get("avg_iframe_tb_diff", 0.0) - final_att_sum.get("avg_iframe_tb_diff", 0.0)
+    if abs(tb_diff) >= 0.02:
         strategies.append({
-            "id": "S4_TOTAL_DURATION_DELTA",
-            "name": "對策 E：出勤影片全程覆蓋跨度與總時長",
-            "score": min(75, int(abs(dur_diff_sec) / 5) + 20),
-            "driver_val": f"{final_drv_sum['total_duration_sec']:.1f} 秒 ({final_drv_sum['total_duration_sec'] / 60:.1f} 分鐘)",
-            "attendant_val": f"{final_att_sum['total_duration_sec']:.1f} 秒 ({final_att_sum['total_duration_sec'] / 60:.1f} 分鐘)",
-            "diff_desc": f"總錄影長度相差 {abs(dur_diff_sec):.0f} 秒 ({abs(dur_diff_sec) / 60:.1f} 分鐘) — {longer_role}錄影較長",
-            "rule": "總錄影長度較長且全程穩定覆蓋車程區間者 = 司機",
+            "id": "S2_TOP_BOTTOM_CONTRAST",
+            "name": "對策 C：I-frame 垂直空間對比度 (擋風玻璃光影 vs 車廂均勻照明)",
+            "score": 90,
+            "driver_val": f"上下半部對比度 = {final_drv_sum.get('avg_iframe_tb_diff', 0.0):.4f}",
+            "attendant_val": f"上下半部對比度 = {final_att_sum.get('avg_iframe_tb_diff', 0.0):.4f}",
+            "diff_desc": f"垂直反差值差距 {abs(tb_diff):.4f} (司機前擋亮天空/暗儀表板反差顯著；救護手後艙日光燈漫射均勻)",
+            "rule": "司機正視前擋風玻璃，垂直光暗反差顯著較大；救護艙內為車頂日光燈均勻漫射照明，上下反差小。反差顯著較大者 = 司機",
         })
 
-    # 對策 F: 與行車紀錄器畫面動態每秒同步率
+    # 對策 D: 與行車紀錄器畫面動態每秒同步率
     if dash_infos and (final_drv_ov >= 15 or final_att_ov >= 15):
         corr_diff = final_drv_dash_corr - final_att_dash_corr
         if abs(corr_diff) >= 0.03:
             higher_role = f"司機({final_drv_name})" if corr_diff > 0 else f"救護手({final_att_name})"
             strategies.append({
-                "id": "S5_DASHCAM_CORRELATION",
-                "name": "對策 F：與【行車紀錄器】車前行車動態同步率 (Pearson r)",
-                "score": min(72, int(abs(corr_diff) * 200) + 30),
+                "id": "S3_DASHCAM_CORRELATION",
+                "name": "對策 D：與【行車紀錄器】車前行車動態同步率 (Pearson r)",
+                "score": min(88, int(abs(corr_diff) * 200) + 40),
                 "driver_val": f"r = {final_drv_dash_corr:+.4f} (時間差校正 {final_drv_lag:+d}秒)",
                 "attendant_val": f"r = {final_att_dash_corr:+.4f} (時間差校正 {final_att_lag:+d}秒)",
-                "diff_desc": f"同步率差距 {abs(corr_diff):.4f} ({higher_role}與行車紀錄器更同步)",
-                "rule": "與行車紀錄器每秒封包變動相關係數較高者 = 司機",
+                "diff_desc": f"同步率差距 {abs(corr_diff):.4f} ({higher_role}正對前擋，與行車紀錄器高度同動)",
+                "rule": "司機正視前方擋風玻璃，身體動態與車前路況高度同動 (Pearson r 較高)；救護手面向後艙擔架，動態與車前無關",
             })
 
-    # 對策 G: 音訊環境指紋 (前座警報胎噪 vs 後艙問診人聲)
-    zcr_diff = final_drv_sum.get("avg_audio_zcr", 0.0) - final_att_sum.get("avg_audio_zcr", 0.0)
-    hi_diff = final_drv_sum.get("avg_audio_highbyte", 0.0) - final_att_sum.get("avg_audio_highbyte", 0.0)
+    # 對策 E: 音訊環境特徵 (前座專注駕駛少通話 vs 後艙照護密集問診)
+    zcr_diff = final_att_sum.get("avg_audio_zcr", 0.0) - final_drv_sum.get("avg_audio_zcr", 0.0)
+    hi_diff = final_att_sum.get("avg_audio_highbyte", 0.0) - final_drv_sum.get("avg_audio_highbyte", 0.0)
     if abs(zcr_diff) >= 0.015 or abs(hi_diff) >= 0.02:
         strategies.append({
-            "id": "S6_AUDIO_TIMBRE_FREQ",
-            "name": "對策 G：音訊環境頻率指紋 (前座警報高頻鳴響 vs 後座人聲對話)",
-            "score": min(65, int(abs(zcr_diff) * 300) + 25),
+            "id": "S4_AUDIO_ACTIVITY",
+            "name": "對策 E：音訊環境特徵 (後艙照護密集問診 vs 前座專注駕駛少話)",
+            "score": 75,
             "driver_val": f"零交越率 ZCR={final_drv_sum.get('avg_audio_zcr', 0.0):.4f} | 高位元組比={final_drv_sum.get('avg_audio_highbyte', 0.0):.4f}",
             "attendant_val": f"零交越率 ZCR={final_att_sum.get('avg_audio_zcr', 0.0):.4f} | 高位元組比={final_att_sum.get('avg_audio_highbyte', 0.0):.4f}",
-            "diff_desc": f"ZCR 差值 {abs(zcr_diff):.4f} (司機前座收音含較高警笛高頻/胎噪振盪)",
-            "rule": "平均音訊零交越率 (ZCR) 與高頻能量較大者 = 司機",
+            "diff_desc": f"語音活躍度差距 {abs(zcr_diff):.4f} (救護手在後艙照護病患、問診密集；司機專注駕駛少發話)",
+            "rule": "送醫途中救護手在後艙照護問診病患，語音活動度高；司機專注前方路況駕駛，收音平穩",
         })
 
-    # 對策 H: 畫面空間光暗對比
-    tb_diff = final_drv_sum.get("avg_iframe_tb_diff", 0.0) - final_att_sum.get("avg_iframe_tb_diff", 0.0)
-    if abs(tb_diff) >= 0.02:
+    # 對策 F: 出勤第一段開機時間差 [個人出勤習慣，不計入勝負]
+    start_diff_sec = round(final_att_sum["first_start_ts"] - final_drv_sum["first_start_ts"], 1)
+    if abs(start_diff_sec) >= 10:
+        who_first = f"司機({final_drv_name})先開機" if start_diff_sec > 0 else f"救護手({final_att_name})先開機"
         strategies.append({
-            "id": "S7_TOP_BOTTOM_CONTRAST",
-            "name": "對策 H：I-frame 垂直空間對比度 (擋風玻璃光影 vs 車廂均勻照明)",
-            "score": min(60, int(abs(tb_diff) * 200) + 20),
-            "driver_val": f"上下半部對比度 = {final_drv_sum.get('avg_iframe_tb_diff', 0.0):.4f}",
-            "attendant_val": f"上下半部對比度 = {final_att_sum.get('avg_iframe_tb_diff', 0.0):.4f}",
-            "diff_desc": f"垂直反差值差距 {abs(tb_diff):.4f} (司機前擋亮天空/暗儀表板反差較大)",
-            "rule": "垂直上下明暗對比標準差較大者 = 司機",
+            "id": "S5_START_TIME_DELTA",
+            "name": "對策 F：出勤第一段開機時間差 [個人出勤習慣，不計入勝負]",
+            "score": 20,
+            "driver_val": final_drv_sum["first_start_str"],
+            "attendant_val": final_att_sum["first_start_str"],
+            "diff_desc": f"相差 {abs(start_diff_sec):.0f} 秒 — {who_first} (救護手拿密錄器給司機佩戴，開機先後吃個人習慣)",
+            "rule": "分隊現場救護手佩戴時拿密錄器給駕駛，開機先後各異，僅作時序備註，不計入勝負分",
+        })
+
+    # 對策 G: 出勤影片全程覆蓋跨度與總時長
+    dur_diff_sec = round(final_att_sum["total_duration_sec"] - final_drv_sum["total_duration_sec"], 1)
+    if abs(dur_diff_sec) >= 30:
+        longer_role = f"救護手({final_att_name})" if dur_diff_sec > 0 else f"司機({final_drv_name})"
+        strategies.append({
+            "id": "S6_TOTAL_DURATION_DELTA",
+            "name": "對策 G：出勤影片總時長 [急診交接延遲連動]",
+            "score": 50,
+            "driver_val": f"{final_drv_sum['total_duration_sec']:.1f} 秒 ({final_drv_sum['total_duration_sec'] / 60:.1f} 分鐘)",
+            "attendant_val": f"{final_att_sum['total_duration_sec']:.1f} 秒 ({final_att_sum['total_duration_sec'] / 60:.1f} 分鐘)",
+            "diff_desc": f"總錄影長度相差 {abs(dur_diff_sec):.0f} 秒 ({abs(dur_diff_sec) / 60:.1f} 分鐘) — {longer_role}錄影較長",
+            "rule": "救護手在急診檢傷交接病患較晚關機，總錄影長度通常較長",
         })
 
     strategies.sort(key=lambda x: x["score"], reverse=True)
@@ -1431,21 +1377,14 @@ def classify_case(case_data: dict, elapsed_sec: float = 0.0) -> dict:
 
     if len(officer_parsed) == 1:
         o = officer_parsed[0]
-        corr, lag, ov = compute_best_lag_correlation(o["series"], dash_series) if dash_series else (0.0, 0, 0)
-        is_drv = (corr >= 0.40) or (dash_summary and abs(o["summary"].get("first_start_ts", 0) - dash_summary.get("first_start_ts", 0)) < 120)
-        role = "司機 (駕駛)" if is_drv else "救護手 (副手)"
-        conf = 85 if is_drv else 70
-        ev = "單卡分析：車輛時空對齊"
-        if dash_infos:
-            ev += f" ｜ 行車路況同步 r={corr:+.3f}"
         return {
             "case_id": case_id,
             "status": "single",
-            "driver": o["name"] if is_drv else "—",
-            "attendant": "—" if is_drv else o["name"],
-            "confidence": conf,
-            "evidence": ev,
-            "report_text": f"案件 {case_id} 僅有 1 位同仁【{o['name']}】，依客觀物理特徵初步判定為 {role}。"
+            "driver": "—",
+            "attendant": o["name"],
+            "confidence": 95,
+            "evidence": "👑 依分隊規定判定：救護手必須全程錄影存證後艙處置，司機可有可無；單卡出勤定案為救護手",
+            "report_text": f"案件 {case_id} 僅有 1 位同仁【{o['name']}】佩戴密錄器錄影。\n依分隊勤務規定，救護手必須全程錄影存證後艙病患處置狀況，司機可有可無，因此直接定案為【救護手】。"
         }
 
     # 計算每位同仁與行車記錄器之同步率
@@ -1469,15 +1408,17 @@ def classify_case(case_data: dict, elapsed_sec: float = 0.0) -> dict:
             drv_obj, att_obj = o1, o2
             drv_score, att_score = score1, score2
             drv_reasons = r1
+            att_reasons = r2
         else:
             drv_obj, att_obj = o2, o1
             drv_score, att_score = score2, score1
             drv_reasons = r2
+            att_reasons = r1
 
         lead = drv_score - att_score
         conf = min(99, max(85, 90 + int(lead * 0.2)))
-        top_reason = drv_reasons[0] if drv_reasons else "出勤發動時序領先"
-        evidence_str = f"👑 客觀物理多特徵聯立 ({drv_obj['name']}領先 {lead:.1f}分: {top_reason})"
+        top_reason = drv_reasons[0] if drv_reasons else "到院推床後較早關機"
+        evidence_str = f"👑 客觀物理多特徵聯立 ({drv_obj['name']}判定司機: {top_reason})"
 
         report_obj, report_text = evaluate_two_officers(
             drv_obj["infos"], att_obj["infos"], dash_infos, elapsed_sec,
@@ -1497,26 +1438,31 @@ def classify_case(case_data: dict, elapsed_sec: float = 0.0) -> dict:
             "report_text": report_text,
         }
     else:
-        # 超過 2 人時，計算每位同仁相對於車輛行駛的物理吻合度得分，由高到低排序，最高者為司機！
+        # 超過 2 人時，計算每位同仁相對於車輛行駛與急診交接的司機傾向分，最高者為司機，其餘歸為救護手
+        all_ends = [o["summary"].get("last_end_ts", 0) for o in officer_parsed if o["summary"].get("last_end_ts", 0) > 0]
+        max_end = max(all_ends) if all_ends else 0
         for o in officer_parsed:
             score = 50.0
             sm = o["summary"]
-            if dash_summary and dash_summary.get("last_end_ts", 0) > 0:
-                ds = dash_summary["first_start_ts"]
-                de = dash_summary["last_end_ts"]
-                d_s = abs(sm.get("first_start_ts", 0) - ds)
-                score += max(0.0, 20.0 - min(20.0, d_s * 0.05))
-                ov = max(0.0, min(sm.get("last_end_ts", 0), de) - max(sm.get("first_start_ts", 0), ds))
-                score += min(20.0, (ov / max(1.0, de - ds)) * 20.0)
-            if o.get("dash_corr", 0.0) > 0.2:
-                score += min(15.0, o["dash_corr"] * 20.0)
+            # A. 到院急診室早關機 (先完成車輛推床任務)
+            if max_end > 0 and sm.get("last_end_ts", 0) > 0:
+                delta_e = max_end - sm["last_end_ts"]
+                if delta_e >= 20:
+                    score += min(35.0, round(delta_e * 0.1, 1))
+            # B. 前擋光影垂直反差
+            tb = sm.get("avg_iframe_tb_diff", 0.0)
+            if tb > 0.8:
+                score += min(15.0, round((tb - 0.5) * 10.0, 1))
+            # C. 行車動態同步
+            if o.get("dash_corr", 0.0) > 0.15:
+                score += min(25.0, round(o["dash_corr"] * 30.0, 1))
             o["raw_driver_score"] = round(score, 1)
 
         officer_parsed.sort(key=lambda x: x["raw_driver_score"], reverse=True)
         drv_obj = officer_parsed[0]
         att_names = [x["name"] for x in officer_parsed[1:]]
         conf = 95
-        ev = f"多人出勤排序：最高司機物理得分 {drv_obj['name']} ({drv_obj['raw_driver_score']}分)"
+        ev = f"👑 多人出勤客觀物理判定：司機【{drv_obj['name']}】({drv_obj['raw_driver_score']}分)"
         report_obj, report_text = evaluate_two_officers(
             drv_obj["infos"], officer_parsed[1]["infos"], dash_infos, elapsed_sec,
             drv_name=drv_obj["name"], att_name=officer_parsed[1]["name"], case_id=case_id
