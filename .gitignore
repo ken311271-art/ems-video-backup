@@ -42,3 +42,7 @@ dist/
 *.app/
 *.exe
 救護影像抓取小幫手_Mac專用*.zip
+
+ffmpeg
+*.zip
+*.rar

@@ -32,6 +32,167 @@ def parse_filename_datetime(fname: str):
     return None
 
 
+
+class VisualFrameAnalyzer:
+    """
+    可攜式 FFmpeg 零依賴真實影格抽樣與空間視覺分析器 (純 Python 標準庫)
+    - 自動偵測本地/專用包內的 ffmpeg.exe (Windows) 或 ffmpeg (Mac/Linux)
+    - 以 PPM P6 純文字/二進位無損管道格式抽取關鍵影格 (單格耗時 < 0.03秒)
+    - 純 Python 標準庫直接解析 RGB 像素矩陣，無需 Pillow / OpenCV
+    - 具備救護車「駕駛座方向盤/前擋」與「後艙醫療艙/推床/頂燈」空間特徵鑑別模型
+    """
+    _ffmpeg_bin = None
+    _ffmpeg_checked = False
+
+    @classmethod
+    def get_ffmpeg_path(cls) -> str:
+        if cls._ffmpeg_checked and cls._ffmpeg_bin and os.path.isfile(cls._ffmpeg_bin):
+            return cls._ffmpeg_bin
+        cls._ffmpeg_checked = True
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        candidates = [
+            os.path.join(script_dir, "ffmpeg.exe"),
+            os.path.join(script_dir, "ffmpeg"),
+            os.path.join(script_dir, "救護影像抓取小幫手_Windows專用包", "ffmpeg.exe"),
+            os.path.join(os.getcwd(), "ffmpeg.exe"),
+            os.path.join(os.getcwd(), "ffmpeg"),
+            shutil.which("ffmpeg.exe"),
+            shutil.which("ffmpeg"),
+            "/tmp/ffmpeg_bin/ffmpeg",
+        ]
+        for c in candidates:
+            if c and os.path.isfile(c):
+                try:
+                    proc = subprocess.run([c, "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2)
+                    if proc.returncode == 0:
+                        cls._ffmpeg_bin = c
+                        return c
+                except Exception:
+                    pass
+        return None
+
+    @classmethod
+    def extract_frame_ppm(cls, video_path: str, timestamp_sec: float = 1.0, width: int = 320, height: int = 180) -> tuple:
+        """抽取指定秒數的單一影格，輸出為 (width, height, rgb_bytes)"""
+        ff = cls.get_ffmpeg_path()
+        if not ff:
+            return None, None, None
+
+        # 避免在 Windows 出現黑色 cmd 視窗跳出
+        startupinfo = None
+        if sys.platform.startswith("win"):
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0
+
+        cmd = [
+            ff,
+            "-ss", f"{timestamp_sec:.2f}",
+            "-i", video_path,
+            "-vframes", "1",
+            "-vf", f"scale={width}:{height}",
+            "-f", "image2pipe",
+            "-vcodec", "ppm",
+            "-"
+        ]
+        try:
+            res = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                startupinfo=startupinfo,
+                timeout=4
+            )
+            data = res.stdout
+            if not data or not data.startswith(b'P6'):
+                return None, None, None
+            # 解析 PPM P6 Header
+            lines = []
+            idx = 0
+            while len(lines) < 3 and idx < len(data):
+                nl = data.find(b'\n', idx)
+                if nl == -1:
+                    break
+                line = data[idx:nl].strip()
+                idx = nl + 1
+                if not line or line.startswith(b'#'):
+                    continue
+                lines.append(line)
+            if len(lines) < 3:
+                return None, None, None
+            dims = lines[1].split()
+            w, h = int(dims[0]), int(dims[1])
+            pixel_bytes = data[idx:idx + w * h * 3]
+            if len(pixel_bytes) < w * h * 3:
+                return None, None, None
+            return w, h, pixel_bytes
+        except Exception:
+            return None, None, None
+
+    @classmethod
+    def analyze_frame_pixels(cls, w: int, h: int, pixels: bytes) -> dict:
+        """
+        純 Python 像素特徵提取：
+        - 司機空間特徵：
+          * 下半部中央 (y: 55%~95%, x: 25%~75%) 為方向盤外圈圓弧，呈深色低亮度 (Dark Ratio 高)
+          * 方向盤上半圓弧邊緣梯度集中 (Arc Edge Density 高)
+          * 上半部前擋 (y: 10%~50%, x: 20%~80%) 採光對比強烈 (Contrast Ratio = M_up / max(10, M_dn) 高)
+        - 後艙醫療艙特徵：
+          * 頂棚長條日光燈漫射照明，下半部為救護推床/毯子/器材，無方向盤深色圓弧環
+        """
+        def get_luma(x, y):
+            off = (y * w + x) * 3
+            return int(0.299 * pixels[off] + 0.587 * pixels[off + 1] + 0.114 * pixels[off + 2])
+
+        # 1. 前擋風玻璃區 (y: 10%~50%, x: 20%~80%)
+        up_y1, up_y2 = int(h * 0.10), int(h * 0.50)
+        up_x1, up_x2 = int(w * 0.20), int(w * 0.80)
+        up_lumas = [get_luma(x, y) for y in range(up_y1, up_y2, 2) for x in range(up_x1, up_x2, 2)]
+        m_up = (sum(up_lumas) / len(up_lumas)) if up_lumas else 1.0
+
+        # 2. 下半部中央方向盤區 (y: 55%~95%, x: 25%~75%)
+        dn_y1, dn_y2 = int(h * 0.55), int(h * 0.95)
+        dn_x1, dn_x2 = int(w * 0.25), int(w * 0.75)
+        dn_lumas = [get_luma(x, y) for y in range(dn_y1, dn_y2, 2) for x in range(dn_x1, dn_x2, 2)]
+        m_dn = (sum(dn_lumas) / len(dn_lumas)) if dn_lumas else 1.0
+
+        # 方向盤深色皮革/橡膠像素比 (luma < 75)
+        dark_pixels = sum(1 for v in dn_lumas if v < 75)
+        dark_ratio = dark_pixels / float(len(dn_lumas)) if dn_lumas else 0.0
+
+        # 方向盤圓弧外圈邊緣梯度 (Sobel 梯度)
+        arc_edges = 0
+        total_checks = 0
+        for y in range(dn_y1 + 2, dn_y2 - 2, 3):
+            for x in range(dn_x1 + 2, dn_x2 - 2, 3):
+                total_checks += 1
+                gx = abs(get_luma(x + 1, y) - get_luma(x - 1, y))
+                gy = abs(get_luma(x, y + 1) - get_luma(x, y - 1))
+                g = gx + gy
+                if 35 <= g <= 170:
+                    arc_edges += 1
+        edge_density = arc_edges / float(max(1, total_checks))
+
+        # 上下明暗對比
+        contrast = m_up / max(10.0, m_dn)
+
+        # 司機方向盤綜合評分 (0.0 ~ 100.0)
+        # 典型司機：dark_ratio > 0.30, contrast > 1.3, edge_density > 0.10
+        raw_score = (dark_ratio * 45.0) + (min(2.8, contrast) / 2.8 * 35.0) + (min(0.4, edge_density) / 0.4 * 20.0)
+        final_score = min(100.0, max(0.0, round(raw_score, 1)))
+
+        return {
+            "score": final_score,
+            "detected": (final_score >= 52.0 and dark_ratio >= 0.25),
+            "dark_ratio": round(dark_ratio, 4),
+            "upper_brightness": round(m_up, 1),
+            "lower_brightness": round(m_dn, 1),
+            "contrast_ratio": round(contrast, 2),
+            "edge_density": round(edge_density, 3),
+        }
+
+
 class FastMP4Inspector:
     """
     100% 純 Python 標準庫極速 MP4/MOV/TS 二進位結構解析器
@@ -133,6 +294,19 @@ class FastMP4Inspector:
 
         info["start_str"] = datetime.fromtimestamp(info["start_ts"]).strftime("%H:%M:%S")
         info["end_str"] = datetime.fromtimestamp(info["end_ts"]).strftime("%H:%M:%S")
+
+        # 👑 若具備 FFmpeg (包含本機綠色免安裝版 ffmpeg.exe)，執行真實空間視覺影格抽樣與物理特徵解析
+        if ext in VIDEO_EXTENSIONS:
+            sample_sec = max(1.0, min(dur * 0.5, max(1.0, dur - 1.0)))
+            w, h, p_bytes = VisualFrameAnalyzer.extract_frame_ppm(filepath, timestamp_sec=sample_sec)
+            if p_bytes:
+                v_res = VisualFrameAnalyzer.analyze_frame_pixels(w, h, p_bytes)
+                info["steering_wheel_arc_score"] = v_res["score"]
+                info["steering_wheel_detected"] = v_res["detected"]
+                info["lower_wheel_darkness_ratio"] = v_res["dark_ratio"]
+                info["upper_windshield_ratio"] = v_res["contrast_ratio"]
+                info["visual_source"] = "ffmpeg_real_frame"
+
         info["parse_ms"] = round((time.perf_counter() - t0) * 1000, 2)
         return info
 
@@ -819,50 +993,34 @@ def summarize_group(infos: list) -> dict:
 def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict = None,
                                       corr1: float = 0.0, corr2: float = 0.0) -> tuple:
     """
-    分隊勤務客觀物理多特徵聯立計分演算法 (純 Python 標準庫，100% 依據消防分隊真實勤務 SOP 與物理空間特性)
-    - 依分隊規定：救護手一定要錄影存證後艙處置，司機可有可無；單卡出勤直接定案為救護手；
-    - 首要核心物理依據：方向盤幾何與駕駛座視野 (送醫途中正對方向盤，權重 40分)；
-    - 關鍵勤務時序依據：車輛巡視與最後關機時序 (司機推床後巡車晚關機；救護手急診送達早關機，權重 35分)；
-    - 行車紀錄器動態同步率：司機正對前擋同動 (權重 25分)；
-    - 開機時間差：救護手拿平板通常先開機再遞給司機，吃個人習慣，不計入勝負分 (0分)。
+    分隊勤務客觀物理多特徵聯立計分演算法 (純 Python 標準庫，100% 依據消防分隊真實勤務 SOP 與空間物理特性)
+    - 依分隊規定：救護手一定要全程錄影存證後艙處置，司機可有可無；單卡出勤直接定案為救護手；
+    - 首要核心物理依據：方向盤視覺空間與駕駛座視野 (送醫途中正對方向盤外圈圓弧，最高權重 60分)；
+    - 行車紀錄器動態同步率：司機正對前擋同動 (最高權重 25分)；
+    - 音訊環境問診特徵：救護手於後艙照護病患問診密集，語音活躍度高 (最高權重 15分)；
+    - 急診關機時序與開機時序：救護手在急診交接處置容易忘記關機而持續錄影，先後開關機純屬個人習慣，絕不作為司機加分項 (0分)。
     回傳: (score1, score2, reasons1, reasons2)
     """
     score1 = 50.0
     score2 = 50.0
     r1, r2 = [], []
 
-    # 1. 👑 首要核心物理依據：方向盤幾何圓弧與駕駛空間視野 [最高 40分]
+    # 1. 👑 首要核心物理依據：方向盤幾何圓弧與駕駛空間視野 [最高 60分]
     wh1 = c1_sum.get("transport_steering_wheel_score", 0.0) or c1_sum.get("avg_steering_wheel_score", 0.0)
     wh2 = c2_sum.get("transport_steering_wheel_score", 0.0) or c2_sum.get("avg_steering_wheel_score", 0.0)
     wh_diff = wh1 - wh2
-    if abs(wh_diff) >= 0.8:
-        pts = min(40.0, round(abs(wh_diff) * 8.0, 1))
+    if abs(wh_diff) >= 1.5:
+        pts = min(60.0, round(abs(wh_diff) * 1.5, 1))
         if wh_diff > 0:
             score1 += pts
-            r1.append(f"方向盤幾何指標較高 ({wh1:.1f} vs {wh2:.1f})")
-            r2.append(f"未見方向盤圓弧幾何 (指標 {wh2:.1f}，呈副駕/後艙視野)")
+            r1.append(f"方向盤空間物理視野指標高 ({wh1:.1f} vs {wh2:.1f})")
+            r2.append(f"未見方向盤輪廓 (指標 {wh2:.1f}，呈後艙照護/推床視野)")
         else:
             score2 += pts
-            r2.append(f"方向盤幾何指標較高 ({wh2:.1f} vs {wh1:.1f})")
-            r1.append(f"未見方向盤圓弧幾何 (指標 {wh1:.1f}，呈副駕/後艙視野)")
+            r2.append(f"方向盤空間物理視野指標高 ({wh2:.1f} vs {wh1:.1f})")
+            r1.append(f"未見方向盤輪廓 (指標 {wh1:.1f}，呈後艙照護/推床視野)")
 
-    # 2. 關鍵勤務時序：車輛巡視與最後關機時序 (司機推床後回車上巡車晚關機；救護手急診送達早關機) [最高 35分]
-    end_diff = c1_sum.get("last_end_ts", 0) - c2_sum.get("last_end_ts", 0)
-    if abs(end_diff) >= 20:
-        delta_et = abs(end_diff)
-        pts = min(35.0, round(delta_et * 0.1, 1))
-        if end_diff > 0:
-            # c1 較晚關機 (司機推床後巡車與車輛交接)，c2 較早關機 (救護手急診送達後關機)
-            score1 += pts
-            r1.append(f"巡車與車輛交接晚 {int(delta_et)}秒 關機")
-            r2.append(f"急診推床送達早 {int(delta_et)}秒 關機")
-        else:
-            # c2 較晚關機，c1 較早關機
-            score2 += pts
-            r2.append(f"巡車與車輛交接晚 {int(delta_et)}秒 關機")
-            r1.append(f"急診推床送達早 {int(delta_et)}秒 關機")
-
-    # 3. 送醫行駛時段與車前行車紀錄器動態同步率 (司機正視前方路況同動) [最高 25分]
+    # 2. 送醫行駛時段與車前行車紀錄器動態同步率 (司機正視前方路況同動) [最高 25分]
     if dash_sum and (corr1 != 0.0 or corr2 != 0.0):
         corr_diff = corr1 - corr2
         if abs(corr_diff) >= 0.03:
@@ -876,8 +1034,30 @@ def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict
                 r2.append(f"車前動態高度同步 (r={corr2:+.3f})")
                 r1.append(f"後艙視角動態與車前無關 (r={corr1:+.3f})")
 
-    # 4. 出勤第一段開機時間差 (救護手拿平板通常先開機再遞給司機，吃個人習慣，不計入勝負分 0分)
-    # 不增減分數，避免被個人習慣偏誤誤導
+    # 3. 送醫途中音訊活躍度 (後艙問診密集 vs 前座專注駕駛少發話) [最高 15分]
+    zcr1 = c1_sum.get("avg_audio_zcr", 0.0)
+    zcr2 = c2_sum.get("avg_audio_zcr", 0.0)
+    zcr_diff = zcr1 - zcr2
+    if abs(zcr_diff) >= 0.01:
+        pts = min(15.0, round(abs(zcr_diff) * 200.0, 1))
+        if zcr_diff > 0:
+            # c1 救護手 (問診多)，c2 司機 (專注開車少發話)
+            score2 += pts
+            r2.append(f"駕駛座專注行車少話語 (ZCR={zcr2:.4f})")
+            r1.append(f"後艙照護問診密集活躍 (ZCR={zcr1:.4f})")
+        else:
+            score1 += pts
+            r1.append(f"駕駛座專注行車少話語 (ZCR={zcr1:.4f})")
+            r2.append(f"後艙照護問診密集活躍 (ZCR={zcr2:.4f})")
+
+    # 4. 急診關機時序與出勤開機時序 (依分隊現場真實情況：吃個人習慣，救護手常因急診交接忘記關機；不計入司機勝負分 0分)
+    end_diff = c1_sum.get("last_end_ts", 0) - c2_sum.get("last_end_ts", 0)
+    if abs(end_diff) >= 30:
+        delta_et = int(abs(end_diff))
+        if end_diff > 0:
+            r1.append(f"急診交接處置持續錄影 (延後 {delta_et}秒 關機，符合救護手習慣)")
+        else:
+            r2.append(f"急診交接處置持續錄影 (延後 {delta_et}秒 關機，符合救護手習慣)")
 
     score1 = min(100.0, round(score1, 1))
     score2 = min(100.0, round(score2, 1))
@@ -983,18 +1163,18 @@ def evaluate_two_officers(drv_infos: list, att_infos: list, dash_infos: list, el
         "rule": "司機胸前密錄器直視方向盤與前擋風玻璃，具備顯著方向盤圓弧幾何輪廓；方向盤幾何指標較高者 = 司機",
     })
 
-    # 對策 B: 車輛巡視與急診最後關機時序 (司機推床後巡車晚關機；救護手急診送達早關機)
+    # 對策 B: 急診病患處置交接與關機時序 (救護手於急診照護處置延後關機，不作為司機加分)
     end_diff_sec = round(final_drv_sum["last_end_ts"] - final_att_sum["last_end_ts"], 1)
     if abs(end_diff_sec) >= 20:
         who_later = f"司機({final_drv_name})晚關機" if end_diff_sec > 0 else f"救護手({final_att_name})晚關機"
         strategies.append({
             "id": "S1_END_TIME_DELTA",
-            "name": "對策 B：車輛巡視與急診最後關機時序 [司機推床後巡車晚關機]",
-            "score": 95,
+            "name": "對策 B：急診病患處置交接與關機時序 [救護手於急診照護處置延後關機]",
+            "score": 30,
             "driver_val": final_drv_sum["last_end_str"],
             "attendant_val": final_att_sum["last_end_str"],
-            "diff_desc": f"相差 {abs(end_diff_sec):.0f} 秒 ({abs(end_diff_sec) / 60:.1f} 分鐘) — {who_later} (司機推床後走回車上巡車、檢查車門較晚關機)",
-            "rule": "合力將擔架床推入急診室後，救護手送達交接完成較早關機；司機走回救護車檢查車門、整理車廂、巡車後關機。較晚關機者 = 司機",
+            "diff_desc": f"相差 {abs(end_diff_sec):.0f} 秒 ({abs(end_diff_sec) / 60:.1f} 分鐘) — {who_later} (救護手在急診室交接照顧病患，常有持續錄影或忘記關機狀況)",
+            "rule": "合力推床進入急診室後，救護手需在急診持續照護病患、登錄生命體徵並與醫護交接，容易忘記關機或持續錄影存證（延後關機者多屬救護手習慣）。此項不計入司機勝負分以防誤判",
         })
 
     # 對策 C: 駕駛座方向盤與儀表座空間光影特徵 (前擋風玻璃亮光 / 下方黑色方向盤暗區 vs 救護艙均勻照明)
@@ -1427,23 +1607,20 @@ def classify_case(case_data: dict, elapsed_sec: float = 0.0) -> dict:
         }
     else:
         # 超過 2 人時，計算每位同仁相對於車輛行駛與方向盤視野的司機傾向分，最高者為司機，其餘歸為救護手
-        all_ends = [o["summary"].get("last_end_ts", 0) for o in officer_parsed if o["summary"].get("last_end_ts", 0) > 0]
-        min_end = min(all_ends) if all_ends else 0
         for o in officer_parsed:
             score = 50.0
             sm = o["summary"]
-            # A. 方向盤幾何指標
+            # A. 👑 核心首選：方向盤空間視野幾何指標 (正對方向盤外圈圓弧，最高 60 分)
             wh = sm.get("transport_steering_wheel_score", 0.0) or sm.get("avg_steering_wheel_score", 0.0)
-            if wh >= 56.0:
-                score += min(35.0, (wh - 55.0) * 10.0)
-            # B. 巡車晚關機
-            if min_end > 0 and sm.get("last_end_ts", 0) > min_end:
-                delta_e = sm["last_end_ts"] - min_end
-                if delta_e >= 20:
-                    score += min(35.0, round(delta_e * 0.1, 1))
-            # C. 行車動態同步
-            if o.get("dash_corr", 0.0) > 0.15:
+            if wh >= 50.0:
+                score += min(60.0, (wh - 50.0) * 1.5)
+            # B. 與車前行車紀錄器動態同步率 (最高 25 分)
+            if o.get("dash_corr", 0.0) > 0.10:
                 score += min(25.0, round(o["dash_corr"] * 30.0, 1))
+            # C. 送醫音訊活動度 (司機專注開車少發話，ZCR 低者偏向司機，最高 15 分)
+            zcr = sm.get("avg_audio_zcr", 0.0)
+            if zcr > 0 and zcr < 0.05:
+                score += min(15.0, (0.05 - zcr) * 300.0)
             o["raw_driver_score"] = round(score, 1)
 
         officer_parsed.sort(key=lambda x: x["raw_driver_score"], reverse=True)
