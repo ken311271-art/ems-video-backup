@@ -1,5 +1,6 @@
 @echo off
 rem = """
+chcp 65001 >nul
 pushd "%~dp0"
 title 司機救護手對策分析實驗室
 
@@ -29,11 +30,11 @@ pause
 goto :exit_point
 
 :done
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo.
     echo =======================================================================
-    echo  [!] 程式執行中斷退出 (代碼: %errorlevel%)
-    echo      若上方有顯示錯誤訊息，請截圖拍照回報。
+    echo  [!] 程式執行發生異常中斷 (結束代碼: %errorlevel%)
+    echo      請參考上方錯誤訊息，或按任意鍵關閉視窗。
     echo =======================================================================
     echo.
     pause
@@ -42,11 +43,7 @@ if %errorlevel% neq 0 (
 :exit_point
 popd
 exit /b
-
-rem """
-
-rem """
-
+"""
 # -*- coding: utf-8 -*-
 import os
 import sys
@@ -2340,6 +2337,16 @@ class RoleStrategyLabApp:
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = RoleStrategyLabApp(root)
-    root.mainloop()
+    try:
+        root = tk.Tk()
+        app = RoleStrategyLabApp(root)
+        root.mainloop()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            import tkinter.messagebox as mb
+            mb.showerror("程式啟動錯誤", f"角色分析實驗室啟動失敗：\n{e}\n\n詳細錯誤訊息請參見命令提示字元視窗。")
+        except Exception:
+            pass
+        sys.exit(1)

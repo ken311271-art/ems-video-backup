@@ -2291,6 +2291,16 @@ class RoleStrategyLabApp:
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = RoleStrategyLabApp(root)
-    root.mainloop()
+    try:
+        root = tk.Tk()
+        app = RoleStrategyLabApp(root)
+        root.mainloop()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            import tkinter.messagebox as mb
+            mb.showerror("程式啟動錯誤", f"角色分析實驗室啟動失敗：\n{e}\n\n詳細錯誤訊息請參見命令提示字元視窗。")
+        except Exception:
+            pass
+        sys.exit(1)
