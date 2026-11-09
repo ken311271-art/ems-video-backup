@@ -948,38 +948,48 @@ def summarize_group(infos: list) -> dict:
     """計算同一位同仁或同一鏡頭多個分段檔案的特徵摘要統計"""
     if not infos:
         return {}
+    # 智慧過濾 < 10 秒的極短雜訊碎片檔案 (避免關機手震或短暫誤按干擾整體統計)
+    valid_infos = [x for x in infos if x.get("duration_sec", 0) >= 10.0] or infos
+
     total_mb = sum(x["size_mb"] for x in infos)
     total_dur = sum(x["duration_sec"] for x in infos)
-    start_ts = min(x["start_ts"] for x in infos)
-    end_ts = max(x["end_ts"] for x in infos)
-    p_means = [x["video_pframe_mean"] for x in infos if x["video_pframe_mean"] > 0]
-    p_cvs = [x["video_pframe_cv"] for x in infos if x["video_pframe_cv"] > 0]
-    p_ratios = [x["video_p_to_i_ratio"] for x in infos if x["video_p_to_i_ratio"] > 0]
-    a_cvs = [x["audio_size_cv"] for x in infos if x["audio_size_cv"] > 0]
-    a_bursts = [x["audio_sparse_burst_ratio"] for x in infos if x["audio_sparse_burst_ratio"] > 0]
-    a_energ = [x["audio_sparse_energy_std"] for x in infos if x["audio_sparse_energy_std"] > 0]
-    a_zcr = [x["audio_sparse_zcr_mean"] for x in infos if x["audio_sparse_zcr_mean"] > 0]
-    a_hi = [x["audio_sparse_highbyte_ratio"] for x in infos if x["audio_sparse_highbyte_ratio"] > 0]
-    tb_diffs = [x["iframe_top_bottom_diff"] for x in infos if x["iframe_top_bottom_diff"] > 0]
-    wheel_scores = [x["steering_wheel_arc_score"] for x in infos if x.get("steering_wheel_arc_score", 0) > 0]
-    wheel_detected_cnt = sum(1 for x in infos if x.get("steering_wheel_detected", False))
-    wheel_darkness = [x["lower_wheel_darkness_ratio"] for x in infos if x.get("lower_wheel_darkness_ratio", 0) > 0]
-    upper_ratios = [x["upper_windshield_ratio"] for x in infos if x.get("upper_windshield_ratio", 0) > 0]
+    start_ts = min(x["start_ts"] for x in valid_infos)
+    end_ts = max(x["end_ts"] for x in valid_infos)
+
+    p_means = [x["video_pframe_mean"] for x in valid_infos if x["video_pframe_mean"] > 0]
+    p_cvs = [x["video_pframe_cv"] for x in valid_infos if x["video_pframe_cv"] > 0]
+    p_ratios = [x["video_p_to_i_ratio"] for x in valid_infos if x["video_p_to_i_ratio"] > 0]
+    a_cvs = [x["audio_size_cv"] for x in valid_infos if x["audio_size_cv"] > 0]
+    a_bursts = [x["audio_sparse_burst_ratio"] for x in valid_infos if x["audio_sparse_burst_ratio"] > 0]
+    a_energ = [x["audio_sparse_energy_std"] for x in valid_infos if x["audio_sparse_energy_std"] > 0]
+    a_zcr = [x["audio_sparse_zcr_mean"] for x in valid_infos if x["audio_sparse_zcr_mean"] > 0]
+    a_hi = [x["audio_sparse_highbyte_ratio"] for x in valid_infos if x["audio_sparse_highbyte_ratio"] > 0]
+    tb_diffs = [x["iframe_top_bottom_diff"] for x in valid_infos if x["iframe_top_bottom_diff"] > 0]
+    wheel_scores = [x["steering_wheel_arc_score"] for x in valid_infos if x.get("steering_wheel_arc_score", 0) > 0]
+    wheel_detected_cnt = sum(1 for x in valid_infos if x.get("steering_wheel_detected", False))
+    wheel_darkness = [x["lower_wheel_darkness_ratio"] for x in valid_infos if x.get("lower_wheel_darkness_ratio", 0) > 0]
+    upper_ratios = [x["upper_windshield_ratio"] for x in valid_infos if x.get("upper_windshield_ratio", 0) > 0]
     is_multi_angle = any(x.get("is_multi_angle_dashcam", False) for x in infos)
     q_spreads = [
         x["dashcam_quadrant_features"]["quadrant_spread"]
-        for x in infos
+        for x in valid_infos
         if x.get("dashcam_quadrant_features", {}).get("quadrant_spread", 0) > 0
     ]
 
     mid_start = start_ts + (end_ts - start_ts) * 0.40
-    transport_infos = [x for x in infos if x["end_ts"] >= mid_start] or infos
+    transport_infos = [x for x in valid_infos if x["end_ts"] >= mid_start] or valid_infos
     tr_p_cvs = [x["video_pframe_cv"] for x in transport_infos if x["video_pframe_cv"] > 0]
     tr_a_bursts = [x["audio_sparse_burst_ratio"] for x in transport_infos if x["audio_sparse_burst_ratio"] > 0]
     tr_wheel_scores = [x["steering_wheel_arc_score"] for x in transport_infos if x.get("steering_wheel_arc_score", 0) > 0]
 
+    # 出勤第一段特徵
+    f1 = valid_infos[0] if valid_infos else {}
+    f1_up = f1.get("upper_windshield_ratio", 1.0)
+    f1_sw = f1.get("steering_wheel_arc_score", 0.0)
+
     return {
         "file_count": len(infos),
+        "valid_file_count": len(valid_infos),
         "total_size_mb": round(total_mb, 2),
         "total_duration_sec": round(total_dur, 1),
         "first_start_ts": start_ts,
@@ -1008,6 +1018,8 @@ def summarize_group(infos: list) -> dict:
         "wheel_detected_count": wheel_detected_cnt,
         "avg_lower_wheel_darkness": round(sum(wheel_darkness) / len(wheel_darkness), 4) if wheel_darkness else 0.0,
         "avg_upper_windshield_ratio": round(sum(upper_ratios) / len(upper_ratios), 3) if upper_ratios else 0.0,
+        "f1_upper_ratio": round(f1_up, 3),
+        "f1_steering_wheel_score": round(f1_sw, 1),
         "is_multi_angle_dashcam": is_multi_angle,
         "avg_quadrant_spread": round(sum(q_spreads) / len(q_spreads), 2) if q_spreads else 0.0,
     }
@@ -1018,24 +1030,25 @@ def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict
     """
     分隊勤務客觀物理多特徵聯立計分演算法 (純 Python 標準庫，100% 依據消防分隊真實勤務 SOP 與空間物理特性)
     - 依分隊規定：救護手一定要全程錄影存證後艙處置，司機可有可無；單卡出勤直接定案為救護手；
-    - 首要核心物理依據：方向盤視覺空間與駕駛座視野 (送醫途中正對方向盤外圈圓弧，排除深色制服遮擋假陽性)；
-    - 前擋風玻璃垂直光學反差：司機直視擋風玻璃採光強烈 (Upper/Lower > 1.20) vs 後艙均勻照明；
-    - 極暗遮蔽判定：下半部暗區 > 70% 判定為救護手於後艙低頭進行 CPR/推床時深色褲子貼近遮蔽，予以扣分；
+    - 首要核心物理依據：前擋風玻璃垂直空間採光反差 (司機正對前擋玻璃採光 vs 後艙均勻照明)；
+    - 救護車出車第一段行駛方向盤視野：司機於分隊車庫即坐入駕駛座開車，具顯著前擋採光與方向盤輪廓；
+    - 提早啟動行車時序：司機先至駕駛座發動出發；
+    - 方向盤幾何輪廓：嚴格設置前擋採光防護閥門 (upper_ratio >= 1.12)，排除後艙平板/背包假陽性；
+    - 急診照護延遲關機時序：救護手在急診交接處置容易忘記關機或持續錄影存證 (延後關機 >= 90s 符合救護手習慣)；
     - 行車紀錄器動態同步率：司機正對前擋同動；
-    - 音訊環境問診特徵：救護手於後艙照護病患問診密集，語音活躍度高；
-    - 急診關機時序與開機時序：救護手在急診交接處置容易忘記關機而持續錄影，先後開關機純屬個人習慣，絕不作為司機加分項 (0分)。
+    - 音訊環境問診特徵：救護手於後艙照護病患問診密集，語音活躍度高。
     回傳: (score1, score2, reasons1, reasons2)
     """
     score1 = 50.0
     score2 = 50.0
     r1, r2 = [], []
 
-    # 0. 空間光學特徵：擋風玻璃垂直採光反差 (司機正對擋風玻璃採光 vs 後艙頂燈均勻照明) [最高 30分]
+    # 1. 空間採光特徵：前擋風玻璃垂直採光反差 (司機正對擋風玻璃採光 vs 後艙頂燈均勻照明) [最高 40分]
     u1 = c1_sum.get("avg_upper_windshield_ratio", 1.0)
     u2 = c2_sum.get("avg_upper_windshield_ratio", 1.0)
     u_diff = u1 - u2
-    if abs(u_diff) >= 0.15:
-        pts = min(30.0, round(abs(u_diff) * 20.0, 1))
+    if abs(u_diff) >= 0.12:
+        pts = min(40.0, round(abs(u_diff) * 35.0, 1))
         if u_diff > 0:
             score1 += pts
             r1.append(f"前擋風玻璃空間採光充足 (垂直光比 {u1:.2f} vs {u2:.2f})")
@@ -1045,40 +1058,66 @@ def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict
             r2.append(f"前擋風玻璃空間採光充足 (垂直光比 {u2:.2f} vs {u1:.2f})")
             r1.append(f"後艙均勻散射照明 (垂直光比 {u1:.2f})")
 
-    # 1. 極暗遮蔽懲罰 (下半部暗區 > 0.70 屬後艙低頭貼近深藍制服褲子，扣分並校正方向盤分數)
-    d1 = c1_sum.get("avg_lower_wheel_darkness", 0.0)
-    d2 = c2_sum.get("avg_lower_wheel_darkness", 0.0)
-    if d1 > 0.70:
-        pen1 = min(25.0, round((d1 - 0.70) * 100.0, 1))
-        score1 -= pen1
-        r1.append(f"密錄器貼近深色制服/後艙推床遮蔽 (暗區 {d1*100:.1f}%)")
-    if d2 > 0.70:
-        pen2 = min(25.0, round((d2 - 0.70) * 100.0, 1))
-        score2 -= pen2
-        r2.append(f"密錄器貼近深色制服/後艙推床遮蔽 (暗區 {d2*100:.1f}%)")
+    # 2. 首段出勤出車行駛特徵 (救護車出車第一段，司機在駕駛座駕駛啟程) [最高 12分]
+    f1_up1 = c1_sum.get("f1_upper_ratio", 1.0)
+    f1_sw1 = c1_sum.get("f1_steering_wheel_score", 0.0)
+    f1_up2 = c2_sum.get("f1_upper_ratio", 1.0)
+    f1_sw2 = c2_sum.get("f1_steering_wheel_score", 0.0)
+    if f1_up1 >= 1.25 and f1_sw1 >= 55.0 and not (f1_up2 >= 1.25 and f1_sw2 >= 55.0):
+        score1 += 12.0
+        r1.append("救護車出車第一段具駕駛座前擋與方向盤視野")
+    elif f1_up2 >= 1.25 and f1_sw2 >= 55.0 and not (f1_up1 >= 1.25 and f1_sw1 >= 55.0):
+        score2 += 12.0
+        r2.append("救護車出車第一段具駕駛座前擋與方向盤視野")
 
-    # 2. 👑 首要核心物理依據：方向盤幾何圓弧與駕駛空間視野 [最高 45分]
-    wh1 = c1_sum.get("transport_steering_wheel_score", 0.0) or c1_sum.get("avg_steering_wheel_score", 0.0)
-    wh2 = c2_sum.get("transport_steering_wheel_score", 0.0) or c2_sum.get("avg_steering_wheel_score", 0.0)
-    adj_wh1 = wh1 * (0.6 if d1 > 0.70 else 1.0)
-    adj_wh2 = wh2 * (0.6 if d2 > 0.70 else 1.0)
-    wh_diff = adj_wh1 - adj_wh2
-    if abs(wh_diff) >= 2.5:
-        pts = min(45.0, round(abs(wh_diff) * 1.5, 1))
+    # 3. 提早出車發動啟程時序 (司機先至駕駛座發動出發) [最高 10分]
+    st1 = c1_sum.get("first_start_ts", 0)
+    st2 = c2_sum.get("first_start_ts", 0)
+    st_diff = st1 - st2
+    if abs(st_diff) >= 90:
+        if st_diff < 0 and f1_sw1 >= 50.0:
+            score1 += 10.0
+            r1.append(f"提早 {int(abs(st_diff))}秒 發動出車")
+        elif st_diff > 0 and f1_sw2 >= 50.0:
+            score2 += 10.0
+            r2.append(f"提早 {int(abs(st_diff))}秒 發動出車")
+
+    # 4. 方向盤幾何輪廓 (設置前擋採光防護閥門: 必須 u >= 1.12，排除後艙平板/背包假陽性) [最高 20分]
+    wh1 = c1_sum.get("avg_steering_wheel_score", 0.0)
+    wh2 = c2_sum.get("avg_steering_wheel_score", 0.0)
+    eff_wh1 = wh1 if u1 >= 1.12 else min(25.0, wh1 * 0.4)
+    eff_wh2 = wh2 if u2 >= 1.12 else min(25.0, wh2 * 0.4)
+    wh_diff = eff_wh1 - eff_wh2
+    if abs(wh_diff) >= 3.0:
+        pts = min(20.0, round(abs(wh_diff) * 0.6, 1))
         if wh_diff > 0:
             score1 += pts
-            r1.append(f"方向盤空間物理視野指標高 ({wh1:.1f} vs {wh2:.1f})")
-            r2.append(f"未見方向盤輪廓 (指標 {wh2:.1f}，呈後艙照護/推床視野)")
+            r1.append(f"方向盤空間視野輪廓高 ({wh1:.1f} vs {wh2:.1f})")
+            r2.append(f"未見前艙方向盤輪廓 (呈後艙照護視野)")
         else:
             score2 += pts
-            r2.append(f"方向盤空間物理視野指標高 ({wh2:.1f} vs {wh1:.1f})")
-            r1.append(f"未見方向盤輪廓 (指標 {wh1:.1f}，呈後艙照護/推床視野)")
+            r2.append(f"方向盤空間視野輪廓高 ({wh2:.1f} vs {wh1:.1f})")
+            r1.append(f"未見前艙方向盤輪廓 (呈後艙照護視野)")
 
-    # 3. 送醫行駛時段與車前行車紀錄器動態同步率 (司機正視前方路況同動) [最高 25分]
+    # 5. 急診交接處置持續錄影 (隊上規定救護手一定要錄，救護手常延後關機 >= 90s) [最高 15分]
+    end_diff = c1_sum.get("last_end_ts", 0) - c2_sum.get("last_end_ts", 0)
+    if abs(end_diff) >= 90:
+        pts = min(15.0, round(abs(end_diff) / 60.0 * 2.0, 1))
+        delta_et = int(abs(end_diff))
+        if end_diff > 0:
+            score2 += pts
+            r1.append(f"急診交接處置持續錄影 (延後 {delta_et}秒 關機，符合救護手習慣)")
+            r2.append(f"符合司機常態關機時序 (停妥救護車後關機)")
+        else:
+            score1 += pts
+            r2.append(f"急診交接處置持續錄影 (延後 {delta_et}秒 關機，符合救護手習慣)")
+            r1.append(f"符合司機常態關機時序 (停妥救護車後關機)")
+
+    # 6. 送醫行駛時段與車前行車紀錄器動態同步率 (司機正視前方路況同動) [最高 20分]
     if dash_sum and (corr1 != 0.0 or corr2 != 0.0):
         corr_diff = corr1 - corr2
         if abs(corr_diff) >= 0.03:
-            pts = min(25.0, round(abs(corr_diff) * 40.0, 1))
+            pts = min(20.0, round(abs(corr_diff) * 35.0, 1))
             if corr_diff > 0:
                 score1 += pts
                 r1.append(f"車前動態高度同步 (r={corr1:+.3f})")
@@ -1088,14 +1127,13 @@ def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict
                 r2.append(f"車前動態高度同步 (r={corr2:+.3f})")
                 r1.append(f"後艙視角動態與車前無關 (r={corr1:+.3f})")
 
-    # 4. 送醫途中音訊活躍度 (後艙問診密集 vs 前座專注駕駛少發話) [最高 15分]
+    # 7. 送醫途中音訊活躍度 (後艙問診密集 vs 前座專注駕駛少發話) [最高 10分]
     zcr1 = c1_sum.get("avg_audio_zcr", 0.0)
     zcr2 = c2_sum.get("avg_audio_zcr", 0.0)
     zcr_diff = zcr1 - zcr2
     if abs(zcr_diff) >= 0.01:
-        pts = min(15.0, round(abs(zcr_diff) * 200.0, 1))
+        pts = min(10.0, round(abs(zcr_diff) * 150.0, 1))
         if zcr_diff > 0:
-            # c1 救護手 (問診多)，c2 司機 (專注開車少發話)
             score2 += pts
             r2.append(f"駕駛座專注行車少話語 (ZCR={zcr2:.4f})")
             r1.append(f"後艙照護問診密集活躍 (ZCR={zcr1:.4f})")
@@ -1104,14 +1142,9 @@ def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict
             r1.append(f"駕駛座專注行車少話語 (ZCR={zcr1:.4f})")
             r2.append(f"後艙照護問診密集活躍 (ZCR={zcr2:.4f})")
 
-    # 5. 急診關機時序與出勤開機時序 (依分隊現場真實情況：吃個人習慣，救護手常因急診交接忘記關機；不計入司機勝負分 0分)
-    end_diff = c1_sum.get("last_end_ts", 0) - c2_sum.get("last_end_ts", 0)
-    if abs(end_diff) >= 30:
-        delta_et = int(abs(end_diff))
-        if end_diff > 0:
-            r1.append(f"急診交接處置持續錄影 (延後 {delta_et}秒 關機，符合救護手習慣)")
-        else:
-            r2.append(f"急診交接處置持續錄影 (延後 {delta_et}秒 關機，符合救護手習慣)")
+    score1 = max(0.0, min(100.0, round(score1, 1)))
+    score2 = max(0.0, min(100.0, round(score2, 1)))
+    return score1, score2, r1, r2
 
     score1 = max(0.0, min(100.0, round(score1, 1)))
     score2 = max(0.0, min(100.0, round(score2, 1)))
@@ -1203,49 +1236,61 @@ def evaluate_two_officers(drv_infos: list, att_infos: list, dash_infos: list, el
 
     strategies = []
 
-    # 👑 核心首選｜對策 A：方向盤幾何圓弧與駕駛空間視野
-    drv_wh = final_drv_sum.get("transport_steering_wheel_score", 0.0) or final_drv_sum.get("avg_steering_wheel_score", 0.0)
-    att_wh = final_att_sum.get("transport_steering_wheel_score", 0.0) or final_att_sum.get("avg_steering_wheel_score", 0.0)
-    wh_diff = drv_wh - att_wh
+    # 👑 核心首選｜對策 A：前擋風玻璃垂直空間採光反差 (司機正對前擋玻璃採光 vs 後艙均勻散射)
+    drv_up = final_drv_sum.get("avg_upper_windshield_ratio", 1.0)
+    att_up = final_att_sum.get("avg_upper_windshield_ratio", 1.0)
+    up_diff = drv_up - att_up
     strategies.append({
-        "id": "S0_STEERING_WHEEL_GEOMETRY",
-        "name": "👑 核心首選｜對策 A：方向盤幾何圓弧與駕駛空間視野 (正對方向盤外圈圓弧檢測)",
+        "id": "S0_WINDSHIELD_CONTRAST",
+        "name": "👑 核心首選｜對策 A：前擋風玻璃垂直空間採光反差 (司機正對前擋外來光 vs 後艙封閉漫射)",
         "score": 100,
-        "driver_val": f"方向盤幾何指標 {drv_wh:.1f} 分 (檢出正下方中央方向盤圓弧輪廓與駕駛空間視野)",
-        "attendant_val": f"方向盤幾何指標 {att_wh:.1f} 分 (未見方向盤圓弧幾何，呈副駕或後艙視野)",
-        "diff_desc": f"方向盤指標差距 {abs(wh_diff):.1f} 分 — 【{final_drv_name}】正對方向盤駕駛救護車；【{final_att_name}】呈現副駕/後艙特徵",
-        "rule": "司機胸前密錄器直視方向盤與前擋風玻璃，具備顯著方向盤圓弧幾何輪廓；方向盤幾何指標較高者 = 司機",
+        "driver_val": f"前擋垂直光比 {drv_up:.2f} (正對擋風玻璃，外部迎面路況與天光採光強烈)",
+        "attendant_val": f"前擋垂直光比 {att_up:.2f} (後艙封閉空間，頂棚均勻漫射照明)",
+        "diff_desc": f"垂直採光反差差距 {abs(up_diff):.2f} — 【{final_drv_name}】正視前擋風玻璃駕駛救護車；【{final_att_name}】身處後艙均勻照明照護傷患",
+        "rule": "救護車司機胸前密錄器直視前擋風玻璃，上方採光永遠強於下方方向盤暗區 (光比 > 1.20)；後艙救護手頂燈均勻照明，垂直反差接近 1.0。反差顯著高者 = 司機",
     })
 
-    # 對策 B: 急診病患處置交接與關機時序 (救護手於急診照護處置延後關機，不作為司機加分)
-    end_diff_sec = round(final_drv_sum["last_end_ts"] - final_att_sum["last_end_ts"], 1)
+    # 對策 B: 救護車出勤首段行駛特徵 (出車第一段司機於駕駛座開車)
+    drv_f1_sw = final_drv_sum.get("f1_steering_wheel_score", 0.0)
+    att_f1_sw = final_att_sum.get("f1_steering_wheel_score", 0.0)
+    drv_f1_up = final_drv_sum.get("f1_upper_ratio", 1.0)
+    att_f1_up = final_att_sum.get("f1_upper_ratio", 1.0)
+    strategies.append({
+        "id": "S1_FIRST_LEG_DRIVING",
+        "name": "對策 B：出勤首段行車視野與方向盤輪廓 (救護車出車第一段行駛檢測)",
+        "score": 90,
+        "driver_val": f"出車首段方向盤={drv_f1_sw:.1f}分 ｜ 首段光比={drv_f1_up:.2f}",
+        "attendant_val": f"出車首段方向盤={att_f1_sw:.1f}分 ｜ 首段光比={att_f1_up:.2f}",
+        "diff_desc": f"【{final_drv_name}】於救護車出車啟程首段即坐入駕駛座操駕；【{final_att_name}】於副駕或後艙拿取裝備",
+        "rule": "分隊出勤時司機在駕駛座啟程駕駛救護車，救護手於副駕操作平板並拿密錄器給駕駛；首段具備前擋與方向盤視野者 = 司機",
+    })
+
+    # 對策 C: 方向盤幾何圓弧與駕駛空間視野 (具備前擋採光條件檢測)
+    drv_wh = final_drv_sum.get("avg_steering_wheel_score", 0.0)
+    att_wh = final_att_sum.get("avg_steering_wheel_score", 0.0)
+    wh_diff = drv_wh - att_wh
+    strategies.append({
+        "id": "S2_STEERING_WHEEL_GEOMETRY",
+        "name": "對策 C：方向盤幾何圓弧空間視野 (前擋採光防護過濾)",
+        "score": 80,
+        "driver_val": f"方向盤幾何指標 {drv_wh:.1f} 分 (駕駛空間視野)",
+        "attendant_val": f"方向盤幾何指標 {att_wh:.1f} 分 (後艙照護視野)",
+        "diff_desc": f"方向盤指標差距 {abs(wh_diff):.1f} 分 — 【{final_drv_name}】正對方向盤駕駛救護車",
+        "rule": "方向盤為鏤空圓環，必須具備前擋採光條件 (光比 >= 1.12) 才屬真正方向盤，避免後艙平板電腦或救護背包圓弧干擾",
+    })
+
+    # 對策 D: 急診病患處置交接與關機時序 (救護手於急診照護處置延後關機)
+    end_diff_sec = round(final_att_sum["last_end_ts"] - final_drv_sum["last_end_ts"], 1)
     if abs(end_diff_sec) >= 20:
-        who_later = f"司機({final_drv_name})晚關機" if end_diff_sec > 0 else f"救護手({final_att_name})晚關機"
+        who_later = f"救護手({final_att_name})晚關機" if end_diff_sec > 0 else f"司機({final_drv_name})晚關機"
         strategies.append({
-            "id": "S1_END_TIME_DELTA",
-            "name": "對策 B：急診病患處置交接與關機時序 [救護手於急診照護處置延後關機]",
-            "score": 30,
+            "id": "S3_END_TIME_DELTA",
+            "name": "對策 D：急診病患處置交接與關機時序 [救護手於急診照護處置延後關機]",
+            "score": 50,
             "driver_val": final_drv_sum["last_end_str"],
             "attendant_val": final_att_sum["last_end_str"],
             "diff_desc": f"相差 {abs(end_diff_sec):.0f} 秒 ({abs(end_diff_sec) / 60:.1f} 分鐘) — {who_later} (救護手在急診室交接照顧病患，常有持續錄影或忘記關機狀況)",
-            "rule": "合力推床進入急診室後，救護手需在急診持續照護病患、登錄生命體徵並與醫護交接，容易忘記關機或持續錄影存證（延後關機者多屬救護手習慣）。此項不計入司機勝負分以防誤判",
-        })
-
-    # 對策 C: 駕駛座方向盤與儀表座空間光影特徵 (前擋風玻璃亮光 / 下方黑色方向盤暗區 vs 救護艙均勻照明)
-    tb_diff = final_drv_sum.get("avg_iframe_tb_diff", 0.0) - final_att_sum.get("avg_iframe_tb_diff", 0.0)
-    drv_wh = final_drv_sum.get("avg_steering_wheel_score", 0.0)
-    att_wh = final_att_sum.get("avg_steering_wheel_score", 0.0)
-    drv_dk = final_drv_sum.get("avg_lower_wheel_darkness", 0.0)
-    att_dk = final_att_sum.get("avg_lower_wheel_darkness", 0.0)
-    if abs(tb_diff) >= 0.02 or abs(drv_dk - att_dk) >= 0.02:
-        strategies.append({
-            "id": "S2_TOP_BOTTOM_CONTRAST",
-            "name": "對策 C：駕駛座方向盤與前擋空間特徵 (前擋強光 / 下方黑色方向盤暗區 vs 救護艙均勻照明)",
-            "score": 90,
-            "driver_val": f"垂直反差={final_drv_sum.get('avg_iframe_tb_diff', 0.0):.2f} ｜ 下方暗區比={drv_dk * 100:.1f}% ｜ 方向盤幾何分={drv_wh:.1f}",
-            "attendant_val": f"垂直反差={final_att_sum.get('avg_iframe_tb_diff', 0.0):.2f} ｜ 下方暗區比={att_dk * 100:.1f}% ｜ 方向盤幾何分={att_wh:.1f}",
-            "diff_desc": f"垂直反差差距 {abs(tb_diff):.2f} (司機密錄器下半部正對黑色方向盤與儀表座，上方為前擋強光；救護手身在後艙無方向盤，頂燈均勻照明)",
-            "rule": "司機胸前正下方為黑色方向盤外圈與深色儀表座，正上方為明亮擋風玻璃，垂直光暗反差顯著高於後艙。反差顯著較大者 = 司機",
+            "rule": "合力推床進入急診室後，救護手需在急診持續照護病患、登錄生命體徵並與醫護交接，容易忘記關機或持續錄影存證（延後關機者多屬救護手習慣）",
         })
 
     # 對策 D: 與行車紀錄器畫面動態每秒同步率
