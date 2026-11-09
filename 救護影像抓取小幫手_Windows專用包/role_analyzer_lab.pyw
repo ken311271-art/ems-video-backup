@@ -820,50 +820,47 @@ def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict
                                       corr1: float = 0.0, corr2: float = 0.0) -> tuple:
     """
     分隊勤務客觀物理多特徵聯立計分演算法 (純 Python 標準庫，100% 依據消防分隊真實勤務 SOP 與物理空間特性)
-    - 依分隊規定：救護手一定要錄影存證後艙處置，司機可有可無；
-    - 開機時間差：個人習慣各異，不計入勝負分 (0分)；
-    - 到院急診關機時序：司機推床完成後較早關機；救護手檢傷處置病患容易延遲/忘記關機 (權重 35分)；
-    - 送醫動態與車前行車紀錄器同步率：司機正視前方路況同動相關 (權重 25分)；
-    - 車艙空間垂直光暗對比度：司機前擋亮光/儀表暗部反差顯著 vs 後艙頂燈均勻漫射 (權重 15分)；
-    - 音訊環境特徵：後艙照護密集問診高語音活動 vs 前座專注駕駛少通話 (權重 15分)。
+    - 依分隊規定：救護手一定要錄影存證後艙處置，司機可有可無；單卡出勤直接定案為救護手；
+    - 首要核心物理依據：方向盤幾何與駕駛座視野 (送醫途中正對方向盤，權重 40分)；
+    - 關鍵勤務時序依據：車輛巡視與最後關機時序 (司機推床後巡車晚關機；救護手急診送達早關機，權重 35分)；
+    - 行車紀錄器動態同步率：司機正對前擋同動 (權重 25分)；
+    - 開機時間差：救護手拿平板通常先開機再遞給司機，吃個人習慣，不計入勝負分 (0分)。
     回傳: (score1, score2, reasons1, reasons2)
     """
     score1 = 50.0
     score2 = 50.0
     r1, r2 = [], []
 
-    # 1. 急診室到院交接關機時序 (救護手交接處置容易延遲/忘記關機；司機推床後先關機) [最高 35分]
+    # 1. 👑 首要核心物理依據：方向盤幾何圓弧與駕駛空間視野 [最高 40分]
+    wh1 = c1_sum.get("transport_steering_wheel_score", 0.0) or c1_sum.get("avg_steering_wheel_score", 0.0)
+    wh2 = c2_sum.get("transport_steering_wheel_score", 0.0) or c2_sum.get("avg_steering_wheel_score", 0.0)
+    wh_diff = wh1 - wh2
+    if abs(wh_diff) >= 0.8:
+        pts = min(40.0, round(abs(wh_diff) * 8.0, 1))
+        if wh_diff > 0:
+            score1 += pts
+            r1.append(f"方向盤幾何指標較高 ({wh1:.1f} vs {wh2:.1f})")
+            r2.append(f"未見方向盤圓弧幾何 (指標 {wh2:.1f}，呈副駕/後艙視野)")
+        else:
+            score2 += pts
+            r2.append(f"方向盤幾何指標較高 ({wh2:.1f} vs {wh1:.1f})")
+            r1.append(f"未見方向盤圓弧幾何 (指標 {wh1:.1f}，呈副駕/後艙視野)")
+
+    # 2. 關鍵勤務時序：車輛巡視與最後關機時序 (司機推床後回車上巡車晚關機；救護手急診送達早關機) [最高 35分]
     end_diff = c1_sum.get("last_end_ts", 0) - c2_sum.get("last_end_ts", 0)
     if abs(end_diff) >= 20:
         delta_et = abs(end_diff)
         pts = min(35.0, round(delta_et * 0.1, 1))
-        if end_diff < 0:
-            # c1 較早關機 (司機推床後完成車輛交接)，c2 較晚關機 (救護手急診檢傷交接忘記關機)
+        if end_diff > 0:
+            # c1 較晚關機 (司機推床後巡車與車輛交接)，c2 較早關機 (救護手急診送達後關機)
             score1 += pts
-            r1.append(f"到院完成推床後較早關機 (早 {int(delta_et)}秒 完成車輛交接)")
-            r2.append(f"急診檢傷延遲關機 (晚 {int(delta_et)}秒，交接處置病患)")
+            r1.append(f"巡車與車輛交接晚 {int(delta_et)}秒 關機")
+            r2.append(f"急診推床送達早 {int(delta_et)}秒 關機")
         else:
-            # c2 較早關機，c1 較晚關機
+            # c2 較晚關機，c1 較早關機
             score2 += pts
-            r2.append(f"到院完成推床後較早關機 (早 {int(delta_et)}秒 完成車輛交接)")
-            r1.append(f"急診檢傷延遲關機 (晚 {int(delta_et)}秒，交接處置病患)")
-
-    # 2. 駕駛座方向盤與儀表座空間光影特徵 (司機前擋天空亮/下方方向盤與儀表暗 vs 救護艙均勻頂燈漫射) [最高 15分]
-    tb1 = c1_sum.get("avg_iframe_tb_diff", 0.0)
-    tb2 = c2_sum.get("avg_iframe_tb_diff", 0.0)
-    if tb1 > 0 and tb2 > 0:
-        tb_diff = tb1 - tb2
-        if abs(tb_diff) >= 0.05:
-            delta_tb = abs(tb_diff)
-            pts = min(15.0, round(delta_tb * 12.0, 1))
-            if tb_diff > 0:
-                score1 += pts
-                r1.append(f"前擋與方向盤儀表垂直反差顯著 (反差={tb1:.2f})")
-                r2.append(f"救護艙均勻頂燈漫射 (反差={tb2:.2f})")
-            else:
-                score2 += pts
-                r2.append(f"前擋與方向盤儀表垂直反差顯著 (反差={tb2:.2f})")
-                r1.append(f"救護艙均勻頂燈漫射 (反差={tb1:.2f})")
+            r2.append(f"巡車與車輛交接晚 {int(delta_et)}秒 關機")
+            r1.append(f"急診推床送達早 {int(delta_et)}秒 關機")
 
     # 3. 送醫行駛時段與車前行車紀錄器動態同步率 (司機正視前方路況同動) [最高 25分]
     if dash_sum and (corr1 != 0.0 or corr2 != 0.0):
@@ -879,22 +876,7 @@ def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict
                 r2.append(f"車前動態高度同步 (r={corr2:+.3f})")
                 r1.append(f"後艙視角動態與車前無關 (r={corr1:+.3f})")
 
-    # 4. 音訊環境特徵 (前座專注駕駛少通話 vs 後艙照護密集問診) [最高 15分]
-    z1 = c1_sum.get("avg_audio_zcr", 0.0)
-    z2 = c2_sum.get("avg_audio_zcr", 0.0)
-    if (z1 > 0 or z2 > 0) and abs(z1 - z2) >= 0.02:
-        pts = 10.0
-        # 救護艙內救護手問診語音活動豐富；司機前座專注駕駛收音平穩
-        if z1 > z2:
-            score2 += pts  # c2 司機加分
-            r2.append("前座駕駛專注少話 (收音平穩)")
-            r1.append("後艙照護密集問診 (高語音活動)")
-        else:
-            score1 += pts  # c1 司機加分
-            r1.append("前座駕駛專注少話 (收音平穩)")
-            r2.append("後艙照護密集問診 (高語音活動)")
-
-    # 5. 出勤第一段開機時間差 (依分隊習慣：救護手拿給司機，誰先開機吃個人習慣，不計入勝負 0分)
+    # 4. 出勤第一段開機時間差 (救護手拿平板通常先開機再遞給司機，吃個人習慣，不計入勝負分 0分)
     # 不增減分數，避免被個人習慣偏誤誤導
 
     score1 = min(100.0, round(score1, 1))
@@ -987,30 +969,32 @@ def evaluate_two_officers(drv_infos: list, att_infos: list, dash_infos: list, el
 
     strategies = []
 
-    # 👑 核心首選｜對策 A：分隊勤務客觀物理多特徵聯立裁決
-    lead_reasons_str = "、".join(drv_reasons[:2]) if drv_reasons else "到院推床後較早關機且車艙光影符合前座"
+    # 👑 核心首選｜對策 A：方向盤幾何圓弧與駕駛空間視野
+    drv_wh = final_drv_sum.get("transport_steering_wheel_score", 0.0) or final_drv_sum.get("avg_steering_wheel_score", 0.0)
+    att_wh = final_att_sum.get("transport_steering_wheel_score", 0.0) or final_att_sum.get("avg_steering_wheel_score", 0.0)
+    wh_diff = drv_wh - att_wh
     strategies.append({
-        "id": "S0_OBJECTIVE_PHYSICAL_JOINT",
-        "name": "👑 核心首選｜對策 A：分隊勤務客觀物理多特徵聯立裁決 (急診交接關機 ＆ 車艙光暗反差 ＆ 動態同動)",
+        "id": "S0_STEERING_WHEEL_GEOMETRY",
+        "name": "👑 核心首選｜對策 A：方向盤幾何圓弧與駕駛空間視野 (正對方向盤外圈圓弧檢測)",
         "score": 100,
-        "driver_val": f"客觀物理綜合得分 {drv_score:.1f} 分 (高度符合駕駛員行為)",
-        "attendant_val": f"客觀物理綜合得分 {att_score:.1f} 分 (符合救護手/後艙時程特徵)",
-        "diff_desc": f"物理綜合分差 {lead_score:.1f} 分 — 【{final_drv_name}】{lead_reasons_str}；【{final_att_name}】呈現後艙照護特徵",
-        "rule": "嚴格依據分隊勤務 SOP：聯立急診交接關機時序、送醫後艙問診、車艙垂直光暗反差與車前動態，多維客觀物理裁決 (不受個人開機習慣干擾)",
+        "driver_val": f"方向盤幾何指標 {drv_wh:.1f} 分 (檢出正下方中央方向盤圓弧輪廓與駕駛空間視野)",
+        "attendant_val": f"方向盤幾何指標 {att_wh:.1f} 分 (未見方向盤圓弧幾何，呈副駕或後艙視野)",
+        "diff_desc": f"方向盤指標差距 {abs(wh_diff):.1f} 分 — 【{final_drv_name}】正對方向盤駕駛救護車；【{final_att_name}】呈現副駕/後艙特徵",
+        "rule": "司機胸前密錄器直視方向盤與前擋風玻璃，具備顯著方向盤圓弧幾何輪廓；方向盤幾何指標較高者 = 司機",
     })
 
-    # 對策 B: 急診室到院交接關機時序 (救護手交接易延遲/忘記關機)
-    end_diff_sec = round(final_att_sum["last_end_ts"] - final_drv_sum["last_end_ts"], 1)
+    # 對策 B: 車輛巡視與急診最後關機時序 (司機推床後巡車晚關機；救護手急診送達早關機)
+    end_diff_sec = round(final_drv_sum["last_end_ts"] - final_att_sum["last_end_ts"], 1)
     if abs(end_diff_sec) >= 20:
-        who_later = f"救護手({final_att_name})晚關機" if end_diff_sec > 0 else f"司機({final_drv_name})晚關機"
+        who_later = f"司機({final_drv_name})晚關機" if end_diff_sec > 0 else f"救護手({final_att_name})晚關機"
         strategies.append({
             "id": "S1_END_TIME_DELTA",
-            "name": "對策 B：急診室到院交接關機時序 [救護手交接處置易延遲/忘記關機]",
+            "name": "對策 B：車輛巡視與急診最後關機時序 [司機推床後巡車晚關機]",
             "score": 95,
             "driver_val": final_drv_sum["last_end_str"],
             "attendant_val": final_att_sum["last_end_str"],
-            "diff_desc": f"相差 {abs(end_diff_sec):.0f} 秒 ({abs(end_diff_sec) / 60:.1f} 分鐘) — {who_later} (在急診檢傷區交接處置病患易延遲關機)",
-            "rule": "到院推床後，司機任務告一段落較早關機；救護手於急診室檢傷台持續照護病患與交接病情，容易延遲/忘記關機。較晚關機者 = 救護手",
+            "diff_desc": f"相差 {abs(end_diff_sec):.0f} 秒 ({abs(end_diff_sec) / 60:.1f} 分鐘) — {who_later} (司機推床後走回車上巡車、檢查車門較晚關機)",
+            "rule": "合力將擔架床推入急診室後，救護手送達交接完成較早關機；司機走回救護車檢查車門、整理車廂、巡車後關機。較晚關機者 = 司機",
         })
 
     # 對策 C: 駕駛座方向盤與儀表座空間光影特徵 (前擋風玻璃亮光 / 下方黑色方向盤暗區 vs 救護艙均勻照明)
@@ -1421,7 +1405,7 @@ def classify_case(case_data: dict, elapsed_sec: float = 0.0) -> dict:
 
         lead = drv_score - att_score
         conf = min(99, max(85, 90 + int(lead * 0.2)))
-        top_reason = drv_reasons[0] if drv_reasons else "到院推床後較早關機"
+        top_reason = drv_reasons[0] if drv_reasons else "方向盤幾何指標領先"
         evidence_str = f"👑 客觀物理多特徵聯立 ({drv_obj['name']}判定司機: {top_reason})"
 
         report_obj, report_text = evaluate_two_officers(
@@ -1442,21 +1426,21 @@ def classify_case(case_data: dict, elapsed_sec: float = 0.0) -> dict:
             "report_text": report_text,
         }
     else:
-        # 超過 2 人時，計算每位同仁相對於車輛行駛與急診交接的司機傾向分，最高者為司機，其餘歸為救護手
+        # 超過 2 人時，計算每位同仁相對於車輛行駛與方向盤視野的司機傾向分，最高者為司機，其餘歸為救護手
         all_ends = [o["summary"].get("last_end_ts", 0) for o in officer_parsed if o["summary"].get("last_end_ts", 0) > 0]
-        max_end = max(all_ends) if all_ends else 0
+        min_end = min(all_ends) if all_ends else 0
         for o in officer_parsed:
             score = 50.0
             sm = o["summary"]
-            # A. 到院急診室早關機 (先完成車輛推床任務)
-            if max_end > 0 and sm.get("last_end_ts", 0) > 0:
-                delta_e = max_end - sm["last_end_ts"]
+            # A. 方向盤幾何指標
+            wh = sm.get("transport_steering_wheel_score", 0.0) or sm.get("avg_steering_wheel_score", 0.0)
+            if wh >= 56.0:
+                score += min(35.0, (wh - 55.0) * 10.0)
+            # B. 巡車晚關機
+            if min_end > 0 and sm.get("last_end_ts", 0) > min_end:
+                delta_e = sm["last_end_ts"] - min_end
                 if delta_e >= 20:
                     score += min(35.0, round(delta_e * 0.1, 1))
-            # B. 前擋光影垂直反差
-            tb = sm.get("avg_iframe_tb_diff", 0.0)
-            if tb > 0.8:
-                score += min(15.0, round((tb - 0.5) * 10.0, 1))
             # C. 行車動態同步
             if o.get("dash_corr", 0.0) > 0.15:
                 score += min(25.0, round(o["dash_corr"] * 30.0, 1))
