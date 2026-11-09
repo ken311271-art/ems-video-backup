@@ -848,7 +848,7 @@ def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict
             r2.append(f"到院完成推床後較早關機 (早 {int(delta_et)}秒 完成車輛交接)")
             r1.append(f"急診檢傷延遲關機 (晚 {int(delta_et)}秒，交接處置病患)")
 
-    # 2. 車艙空間垂直光暗對比度 (司機前擋天空亮/儀表暗 vs 救護艙均勻日光燈漫射) [最高 15分]
+    # 2. 駕駛座方向盤與儀表座空間光影特徵 (司機前擋天空亮/下方方向盤與儀表暗 vs 救護艙均勻頂燈漫射) [最高 15分]
     tb1 = c1_sum.get("avg_iframe_tb_diff", 0.0)
     tb2 = c2_sum.get("avg_iframe_tb_diff", 0.0)
     if tb1 > 0 and tb2 > 0:
@@ -858,11 +858,11 @@ def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict
             pts = min(15.0, round(delta_tb * 12.0, 1))
             if tb_diff > 0:
                 score1 += pts
-                r1.append(f"前擋光影垂直反差顯著 (反差={tb1:.2f})")
+                r1.append(f"前擋與方向盤儀表垂直反差顯著 (反差={tb1:.2f})")
                 r2.append(f"救護艙均勻頂燈漫射 (反差={tb2:.2f})")
             else:
                 score2 += pts
-                r2.append(f"前擋光影垂直反差顯著 (反差={tb2:.2f})")
+                r2.append(f"前擋與方向盤儀表垂直反差顯著 (反差={tb2:.2f})")
                 r1.append(f"救護艙均勻頂燈漫射 (反差={tb1:.2f})")
 
     # 3. 送醫行駛時段與車前行車紀錄器動態同步率 (司機正視前方路況同動) [最高 25分]
@@ -1013,17 +1013,21 @@ def evaluate_two_officers(drv_infos: list, att_infos: list, dash_infos: list, el
             "rule": "到院推床後，司機任務告一段落較早關機；救護手於急診室檢傷台持續照護病患與交接病情，容易延遲/忘記關機。較晚關機者 = 救護手",
         })
 
-    # 對策 C: 畫面空間光暗對比 (擋風玻璃光影 vs 車廂均勻照明)
+    # 對策 C: 駕駛座方向盤與儀表座空間光影特徵 (前擋風玻璃亮光 / 下方黑色方向盤暗區 vs 救護艙均勻照明)
     tb_diff = final_drv_sum.get("avg_iframe_tb_diff", 0.0) - final_att_sum.get("avg_iframe_tb_diff", 0.0)
-    if abs(tb_diff) >= 0.02:
+    drv_wh = final_drv_sum.get("avg_steering_wheel_score", 0.0)
+    att_wh = final_att_sum.get("avg_steering_wheel_score", 0.0)
+    drv_dk = final_drv_sum.get("avg_lower_wheel_darkness", 0.0)
+    att_dk = final_att_sum.get("avg_lower_wheel_darkness", 0.0)
+    if abs(tb_diff) >= 0.02 or abs(drv_dk - att_dk) >= 0.02:
         strategies.append({
             "id": "S2_TOP_BOTTOM_CONTRAST",
-            "name": "對策 C：I-frame 垂直空間對比度 (擋風玻璃光影 vs 車廂均勻照明)",
+            "name": "對策 C：駕駛座方向盤與前擋空間特徵 (前擋強光 / 下方黑色方向盤暗區 vs 救護艙均勻照明)",
             "score": 90,
-            "driver_val": f"上下半部對比度 = {final_drv_sum.get('avg_iframe_tb_diff', 0.0):.4f}",
-            "attendant_val": f"上下半部對比度 = {final_att_sum.get('avg_iframe_tb_diff', 0.0):.4f}",
-            "diff_desc": f"垂直反差值差距 {abs(tb_diff):.4f} (司機前擋亮天空/暗儀表板反差顯著；救護手後艙日光燈漫射均勻)",
-            "rule": "司機正視前擋風玻璃，垂直光暗反差顯著較大；救護艙內為車頂日光燈均勻漫射照明，上下反差小。反差顯著較大者 = 司機",
+            "driver_val": f"垂直反差={final_drv_sum.get('avg_iframe_tb_diff', 0.0):.2f} ｜ 下方暗區比={drv_dk * 100:.1f}% ｜ 方向盤幾何分={drv_wh:.1f}",
+            "attendant_val": f"垂直反差={final_att_sum.get('avg_iframe_tb_diff', 0.0):.2f} ｜ 下方暗區比={att_dk * 100:.1f}% ｜ 方向盤幾何分={att_wh:.1f}",
+            "diff_desc": f"垂直反差差距 {abs(tb_diff):.2f} (司機密錄器下半部正對黑色方向盤與儀表座，上方為前擋強光；救護手身在後艙無方向盤，頂燈均勻照明)",
+            "rule": "司機胸前正下方為黑色方向盤外圈與深色儀表座，正上方為明亮擋風玻璃，垂直光暗反差顯著高於後艙。反差顯著較大者 = 司機",
         })
 
     # 對策 D: 與行車紀錄器畫面動態每秒同步率
