@@ -3196,7 +3196,12 @@ class ArchiveTaskTab(ttk.Frame):
             pass
 
     def browse_path(self, target_entry, title):
-        selected = filedialog.askdirectory(title=title)
+        init_dir = target_entry.get().strip() if target_entry else ""
+        if not init_dir or not os.path.exists(init_dir):
+            init_dir = self.app.config.get("bodycam_target", "") if hasattr(self, "app") else ""
+        if not init_dir or not os.path.exists(init_dir):
+            init_dir = os.getcwd()
+        selected = filedialog.askdirectory(title=title, initialdir=init_dir)
         if selected:
             target_entry.delete(0, tk.END)
             target_entry.insert(0, selected)
@@ -3370,7 +3375,10 @@ class ArchiveTaskTab(ttk.Frame):
                 "未設定勤務表目錄",
                 "尚未指定當月勤務表資料夾路徑！\n\n是否立即選取存放當月勤務表（如：分隊-1020.xlsm）的資料夾？"
             ):
-                dir_selected = filedialog.askdirectory(title="選取存放當月勤務表之資料夾")
+                init_roster = self.app.config.get("roster_path", "")
+                if not init_roster or not os.path.exists(init_roster):
+                    init_roster = os.getcwd()
+                dir_selected = filedialog.askdirectory(title="選取存放當月勤務表之資料夾", initialdir=init_roster)
                 if dir_selected:
                     self.app.config["roster_path"] = dir_selected
                     if hasattr(self.app, 'entry_roster_path'):
@@ -6281,7 +6289,12 @@ class VideoBackupApp:
 
     def browse_roster_dir(self):
         """選取存放當月勤務表之資料夾"""
-        dir_selected = filedialog.askdirectory(title="選取存放當月勤務表之資料夾 (內含 分隊-月份日期.xlsm)")
+        init_dir = self.entry_roster_path.get().strip() if hasattr(self, 'entry_roster_path') else ""
+        if not init_dir or not os.path.exists(init_dir):
+            init_dir = self.config.get("roster_path", "")
+        if not init_dir or not os.path.exists(init_dir):
+            init_dir = os.getcwd()
+        dir_selected = filedialog.askdirectory(title="選取存放當月勤務表之資料夾 (內含 分隊-月份日期.xlsm)", initialdir=init_dir)
         if dir_selected:
             self.entry_roster_path.delete(0, tk.END)
             self.entry_roster_path.insert(0, dir_selected)
@@ -6372,7 +6385,10 @@ class VideoBackupApp:
 
     def browse_update_dir(self):
         """提供選取存放更新檔之資料夾"""
-        dir_selected = filedialog.askdirectory(title="選取存放更新檔之資料夾 (可為隨身碟、NAS共用槽或下載資料夾)")
+        init_dir = self.entry_update_dir.get().strip() if hasattr(self, 'entry_update_dir') else ""
+        if not init_dir or not os.path.exists(init_dir):
+            init_dir = os.getcwd()
+        dir_selected = filedialog.askdirectory(title="選取存放更新檔之資料夾 (可為隨身碟、NAS共用槽或下載資料夾)", initialdir=init_dir)
         if dir_selected:
             self.entry_update_dir.delete(0, tk.END)
             self.entry_update_dir.insert(0, dir_selected)

@@ -203,8 +203,10 @@ class VisualFrameAnalyzer:
         dn_lumas = [get_luma(x, y) for y in range(dn_y1, dn_y2, 2) for x in range(dn_x1, dn_x2, 2)]
         m_dn = (sum(dn_lumas) / len(dn_lumas)) if dn_lumas else 1.0
 
-        # 方向盤深色皮革/橡膠像素比 (luma < 75)
-        dark_pixels = sum(1 for v in dn_lumas if v < 75)
+        # 方向盤深色皮革/橡膠像素比 (考慮夜視增益自適應閾值)
+        # 若畫面整體受夜視拉高，以相對暗區 (luma < max(50, m_dn * 0.75)) 計算
+        dark_thresh = min(75, max(45, int(m_dn * 0.75)))
+        dark_pixels = sum(1 for v in dn_lumas if v < dark_thresh)
         dark_ratio = dark_pixels / float(len(dn_lumas)) if dn_lumas else 0.0
 
         # 方向盤圓弧外圈邊緣梯度 (Sobel 梯度)
@@ -216,21 +218,42 @@ class VisualFrameAnalyzer:
                 gx = abs(get_luma(x + 1, y) - get_luma(x - 1, y))
                 gy = abs(get_luma(x, y + 1) - get_luma(x, y - 1))
                 g = gx + gy
-                if 35 <= g <= 170:
+                if 30 <= g <= 170:
                     arc_edges += 1
         edge_density = arc_edges / float(max(1, total_checks))
 
-        # 上下明暗對比
+        # 上下明暗對比 (司機正視前擋風玻璃，contrast 顯著較高)
         contrast = m_up / max(10.0, m_dn)
 
-        # 司機方向盤綜合評分 (0.0 ~ 100.0)
-        # 典型司機：dark_ratio > 0.30, contrast > 1.3, edge_density > 0.10
-        raw_score = (dark_ratio * 45.0) + (min(2.8, contrast) / 2.8 * 35.0) + (min(0.4, edge_density) / 0.4 * 20.0)
-        final_score = min(100.0, max(0.0, round(raw_score, 1)))
+        # 👑 自適應評分機制 (修正深色長褲/遮擋誤判)：
+        # A. 深色比評分 (40分)：方向盤圓圈黃金區間為 0.20 ~ 0.55；
+        #    若 > 0.70 表示鏡頭向下貼近深藍色/黑色救護長褲或陰影，予以嚴重遞減懲罰！
+        if dark_ratio <= 0.05:
+            dark_pts = dark_ratio / 0.05 * 10.0
+        elif dark_ratio <= 0.55:
+            dark_pts = 10.0 + (dark_ratio - 0.05) / 0.50 * 30.0  # 10 ~ 40分
+        elif dark_ratio <= 0.70:
+            dark_pts = 40.0 - (dark_ratio - 0.55) / 0.15 * 18.0  # 40 ~ 22分
+        else:
+            # 大於 0.70：貼近深色工作褲或椅背遮擋，非方向盤！
+            dark_pts = max(3.0, 22.0 - (dark_ratio - 0.70) * 75.0)
+
+        # B. 前擋明暗反差評分 (40分)：司機正對前擋，外來採光強烈，contrast 顯著大於 1.20
+        if contrast >= 1.20:
+            contrast_pts = min(40.0, 20.0 + (contrast - 1.20) * 30.0)
+        elif contrast >= 1.0:
+            contrast_pts = 10.0 + (contrast - 1.0) * 50.0
+        else:
+            contrast_pts = max(5.0, contrast * 10.0)
+
+        # C. 邊緣梯度密度評分 (20分)
+        edge_pts = min(20.0, edge_density / 0.25 * 20.0)
+
+        final_score = min(100.0, max(0.0, round(dark_pts + contrast_pts + edge_pts, 1)))
 
         return {
             "score": final_score,
-            "detected": (final_score >= 52.0 and dark_ratio >= 0.25),
+            "detected": (final_score >= 52.0 and 0.15 <= dark_ratio <= 0.65),
             "dark_ratio": round(dark_ratio, 4),
             "upper_brightness": round(m_up, 1),
             "lower_brightness": round(m_dn, 1),
@@ -1041,9 +1064,11 @@ def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict
     """
     分隊勤務客觀物理多特徵聯立計分演算法 (純 Python 標準庫，100% 依據消防分隊真實勤務 SOP 與空間物理特性)
     - 依分隊規定：救護手一定要全程錄影存證後艙處置，司機可有可無；單卡出勤直接定案為救護手；
-    - 首要核心物理依據：方向盤視覺空間與駕駛座視野 (送醫途中正對方向盤外圈圓弧，最高權重 60分)；
-    - 行車紀錄器動態同步率：司機正對前擋同動 (最高權重 25分)；
-    - 音訊環境問診特徵：救護手於後艙照護病患問診密集，語音活躍度高 (最高權重 15分)；
+    - 首要核心物理依據：方向盤視覺空間與駕駛座視野 (送醫途中正對方向盤外圈圓弧，排除深色制服遮擋假陽性)；
+    - 前擋風玻璃垂直光學反差：司機直視擋風玻璃採光強烈 (Upper/Lower > 1.20) vs 後艙均勻照明；
+    - 極暗遮蔽判定：下半部暗區 > 70% 判定為救護手於後艙低頭進行 CPR/推床時深色褲子貼近遮蔽，予以扣分；
+    - 行車紀錄器動態同步率：司機正對前擋同動；
+    - 音訊環境問診特徵：救護手於後艙照護病患問診密集，語音活躍度高；
     - 急診關機時序與開機時序：救護手在急診交接處置容易忘記關機而持續錄影，先後開關機純屬個人習慣，絕不作為司機加分項 (0分)。
     回傳: (score1, score2, reasons1, reasons2)
     """
@@ -1051,12 +1076,41 @@ def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict
     score2 = 50.0
     r1, r2 = [], []
 
-    # 1. 👑 首要核心物理依據：方向盤幾何圓弧與駕駛空間視野 [最高 60分]
+    # 0. 空間光學特徵：擋風玻璃垂直採光反差 (司機正對擋風玻璃採光 vs 後艙頂燈均勻照明) [最高 30分]
+    u1 = c1_sum.get("avg_upper_windshield_ratio", 1.0)
+    u2 = c2_sum.get("avg_upper_windshield_ratio", 1.0)
+    u_diff = u1 - u2
+    if abs(u_diff) >= 0.15:
+        pts = min(30.0, round(abs(u_diff) * 20.0, 1))
+        if u_diff > 0:
+            score1 += pts
+            r1.append(f"前擋風玻璃空間採光充足 (垂直光比 {u1:.2f} vs {u2:.2f})")
+            r2.append(f"後艙均勻散射照明 (垂直光比 {u2:.2f})")
+        else:
+            score2 += pts
+            r2.append(f"前擋風玻璃空間採光充足 (垂直光比 {u2:.2f} vs {u1:.2f})")
+            r1.append(f"後艙均勻散射照明 (垂直光比 {u1:.2f})")
+
+    # 1. 極暗遮蔽懲罰 (下半部暗區 > 0.70 屬後艙低頭貼近深藍制服褲子，扣分並校正方向盤分數)
+    d1 = c1_sum.get("avg_lower_wheel_darkness", 0.0)
+    d2 = c2_sum.get("avg_lower_wheel_darkness", 0.0)
+    if d1 > 0.70:
+        pen1 = min(25.0, round((d1 - 0.70) * 100.0, 1))
+        score1 -= pen1
+        r1.append(f"密錄器貼近深色制服/後艙推床遮蔽 (暗區 {d1*100:.1f}%)")
+    if d2 > 0.70:
+        pen2 = min(25.0, round((d2 - 0.70) * 100.0, 1))
+        score2 -= pen2
+        r2.append(f"密錄器貼近深色制服/後艙推床遮蔽 (暗區 {d2*100:.1f}%)")
+
+    # 2. 👑 首要核心物理依據：方向盤幾何圓弧與駕駛空間視野 [最高 45分]
     wh1 = c1_sum.get("transport_steering_wheel_score", 0.0) or c1_sum.get("avg_steering_wheel_score", 0.0)
     wh2 = c2_sum.get("transport_steering_wheel_score", 0.0) or c2_sum.get("avg_steering_wheel_score", 0.0)
-    wh_diff = wh1 - wh2
-    if abs(wh_diff) >= 1.5:
-        pts = min(60.0, round(abs(wh_diff) * 1.5, 1))
+    adj_wh1 = wh1 * (0.6 if d1 > 0.70 else 1.0)
+    adj_wh2 = wh2 * (0.6 if d2 > 0.70 else 1.0)
+    wh_diff = adj_wh1 - adj_wh2
+    if abs(wh_diff) >= 2.5:
+        pts = min(45.0, round(abs(wh_diff) * 1.5, 1))
         if wh_diff > 0:
             score1 += pts
             r1.append(f"方向盤空間物理視野指標高 ({wh1:.1f} vs {wh2:.1f})")
@@ -1066,7 +1120,7 @@ def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict
             r2.append(f"方向盤空間物理視野指標高 ({wh2:.1f} vs {wh1:.1f})")
             r1.append(f"未見方向盤輪廓 (指標 {wh1:.1f}，呈後艙照護/推床視野)")
 
-    # 2. 送醫行駛時段與車前行車紀錄器動態同步率 (司機正視前方路況同動) [最高 25分]
+    # 3. 送醫行駛時段與車前行車紀錄器動態同步率 (司機正視前方路況同動) [最高 25分]
     if dash_sum and (corr1 != 0.0 or corr2 != 0.0):
         corr_diff = corr1 - corr2
         if abs(corr_diff) >= 0.03:
@@ -1080,7 +1134,7 @@ def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict
                 r2.append(f"車前動態高度同步 (r={corr2:+.3f})")
                 r1.append(f"後艙視角動態與車前無關 (r={corr1:+.3f})")
 
-    # 3. 送醫途中音訊活躍度 (後艙問診密集 vs 前座專注駕駛少發話) [最高 15分]
+    # 4. 送醫途中音訊活躍度 (後艙問診密集 vs 前座專注駕駛少發話) [最高 15分]
     zcr1 = c1_sum.get("avg_audio_zcr", 0.0)
     zcr2 = c2_sum.get("avg_audio_zcr", 0.0)
     zcr_diff = zcr1 - zcr2
@@ -1096,7 +1150,7 @@ def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict
             r1.append(f"駕駛座專注行車少話語 (ZCR={zcr1:.4f})")
             r2.append(f"後艙照護問診密集活躍 (ZCR={zcr2:.4f})")
 
-    # 4. 急診關機時序與出勤開機時序 (依分隊現場真實情況：吃個人習慣，救護手常因急診交接忘記關機；不計入司機勝負分 0分)
+    # 5. 急診關機時序與出勤開機時序 (依分隊現場真實情況：吃個人習慣，救護手常因急診交接忘記關機；不計入司機勝負分 0分)
     end_diff = c1_sum.get("last_end_ts", 0) - c2_sum.get("last_end_ts", 0)
     if abs(end_diff) >= 30:
         delta_et = int(abs(end_diff))
@@ -1105,8 +1159,8 @@ def compute_objective_physical_scores(c1_sum: dict, c2_sum: dict, dash_sum: dict
         else:
             r2.append(f"急診交接處置持續錄影 (延後 {delta_et}秒 關機，符合救護手習慣)")
 
-    score1 = min(100.0, round(score1, 1))
-    score2 = min(100.0, round(score2, 1))
+    score1 = max(0.0, min(100.0, round(score1, 1)))
+    score2 = max(0.0, min(100.0, round(score2, 1)))
     return score1, score2, r1, r2
 
 
@@ -1717,6 +1771,8 @@ class RoleStrategyLabApp:
         self.config = load_backup_config()
         self.last_batch_results = []
         self.case_reports_map = {}
+        self.user_verifications = {}  # case_id -> {"status": "❓ 未確認", "actual_driver": "", "notes": ""}
+        self.last_chosen_dir = ""
         self.last_manual_report_data = None
 
         self.setup_ui()
@@ -1817,6 +1873,28 @@ class RoleStrategyLabApp:
         )
         self.btn_batch_run.pack(side="left", padx=(0, 6))
 
+        self.btn_batch_export_json = tk.Button(
+            f_actions,
+            text="📦 一鍵匯出全案件診斷封裝包 (JSON)",
+            bg="#0D9488",
+            fg="#FFFFFF",
+            font=("Helvetica", 10, "bold"),
+            padx=10,
+            pady=4,
+            cursor="hand2",
+            command=self.export_batch_diagnostic_package,
+            state="disabled",
+        )
+        self.btn_batch_export_json.pack(side="left", padx=4)
+
+        self.btn_batch_export_txt = ttk.Button(
+            f_actions,
+            text="📄 匯出全案文字報告 (TXT)",
+            command=self.export_batch_all_reports_txt,
+            state="disabled",
+        )
+        self.btn_batch_export_txt.pack(side="left", padx=4)
+
         self.btn_batch_csv = ttk.Button(
             f_actions,
             text="💾 匯出判定總表 (CSV 支援 Excel)",
@@ -1843,28 +1921,41 @@ class RoleStrategyLabApp:
 
         # 結果區域 (上下分割)
         # 上半部: Treeview 判定清單
-        f_table = ttk.LabelFrame(self.tab_batch, text="【步驟 2】全日各案件司機與救護手自動判定總表 (點擊任一案件可查看下方對決報告)", padding=6)
+        f_table = ttk.LabelFrame(self.tab_batch, text="【步驟 2】全日各案件司機與救護手自動判定總表 (可點選每案進行人工查核與查看下方報告)", padding=6)
         f_table.pack(fill="x", padx=10, pady=4)
 
-        cols = ("case", "driver", "attendant", "conf", "evidence")
-        self.tree_cases = ttk.Treeview(f_table, columns=cols, show="headings", height=6)
+        cols = ("case", "driver", "attendant", "conf", "verify", "evidence")
+        self.tree_cases = ttk.Treeview(f_table, columns=cols, show="headings", height=7)
         self.tree_cases.heading("case", text="案件編號")
         self.tree_cases.heading("driver", text="🚗 判定司機 (駕駛)")
         self.tree_cases.heading("attendant", text="🩺 判定救護手 (副手)")
         self.tree_cases.heading("conf", text="信心度")
-        self.tree_cases.heading("evidence", text="💡 主要判定依據 (9大對策核心差異)")
+        self.tree_cases.heading("verify", text="👤 人工核對 (點擊切換)")
+        self.tree_cases.heading("evidence", text="💡 主要判定依據 (客觀物理差異)")
 
         self.tree_cases.column("case", width=80, anchor="center")
         self.tree_cases.column("driver", width=140, anchor="w")
         self.tree_cases.column("attendant", width=140, anchor="w")
-        self.tree_cases.column("conf", width=70, anchor="center")
-        self.tree_cases.column("evidence", width=500, anchor="w")
+        self.tree_cases.column("conf", width=65, anchor="center")
+        self.tree_cases.column("verify", width=125, anchor="center")
+        self.tree_cases.column("evidence", width=460, anchor="w")
 
         tree_scroll = ttk.Scrollbar(f_table, orient="vertical", command=self.tree_cases.yview)
         self.tree_cases.configure(yscrollcommand=tree_scroll.set)
         self.tree_cases.pack(side="left", fill="x", expand=True)
         tree_scroll.pack(side="right", fill="y")
         self.tree_cases.bind("<<TreeviewSelect>>", self._on_tree_select_case)
+        self.tree_cases.bind("<Double-1>", self._on_tree_double_click)
+
+        # 人工核對操作列
+        f_verify_bar = ttk.Frame(f_table)
+        f_verify_bar.pack(fill="x", pady=(4, 0))
+        ttk.Label(f_verify_bar, text="【人工快速查核】：", font=("Helvetica", 9, "bold")).pack(side="left")
+        ttk.Button(f_verify_bar, text="✅ 標記選取案：判定正確", command=lambda: self._set_case_verification("✅ 正確")).pack(side="left", padx=2)
+        ttk.Button(f_verify_bar, text="❌ 標記選取案：判定錯誤", command=lambda: self._set_case_verification("❌ 錯誤")).pack(side="left", padx=2)
+        ttk.Button(f_verify_bar, text="❓ 重設為：未確認", command=lambda: self._set_case_verification("❓ 未確認")).pack(side="left", padx=2)
+        self.lbl_verify_stats = ttk.Label(f_verify_bar, text="（亦可雙擊上方表格列快速循環切換「✅ 正確 / ❌ 錯誤」）", foreground="#64748B")
+        self.lbl_verify_stats.pack(side="left", padx=6)
 
         # 下半部: 詳細對決 Text 視窗
         f_detail = ttk.LabelFrame(self.tab_batch, text="【步驟 3】選定案件 9 大對策深度對決詳細數據與 JSON 特徵碼", padding=6)
@@ -1993,25 +2084,48 @@ class RoleStrategyLabApp:
         scroll.pack(side="right", fill="y")
 
     # ==========================
-    # 檔案選取與路徑智慧助手
+    # 檔案選取與路徑智慧助手 (遵守 station-utility-developer 3.4 規範：優先以輸入框路徑為 initialdir)
     # ==========================
+    def _get_smart_initialdir(self, entry_widget: ttk.Entry) -> str:
+        cur_val = entry_widget.get().strip() if entry_widget else ""
+        if cur_val:
+            # 處理可能的多檔案分號分隔字串
+            if ";" in cur_val:
+                cur_val = cur_val.split(";")[0].strip()
+            if os.path.isdir(cur_val):
+                return cur_val
+            p = Path(cur_val)
+            if p.is_file() or p.parent.is_dir():
+                return str(p.parent)
+        if hasattr(self, "last_chosen_dir") and self.last_chosen_dir and os.path.exists(self.last_chosen_dir):
+            return self.last_chosen_dir
+        body_target = self.config.get("bodycam_target", "")
+        if body_target and os.path.exists(body_target):
+            return body_target
+        return os.getcwd()
+
     def browse_folder(self, entry_widget: ttk.Entry, auto_dash: bool = False):
-        d = filedialog.askdirectory(title="選擇影片所在資料夾")
+        init_dir = self._get_smart_initialdir(entry_widget)
+        d = filedialog.askdirectory(title="選擇影片所在資料夾", initialdir=init_dir)
         if d:
+            self.last_chosen_dir = d
             entry_widget.delete(0, tk.END)
             entry_widget.insert(0, d)
             if auto_dash:
                 self._auto_match_dashcam()
 
     def browse_files(self, entry_widget: ttk.Entry):
+        init_dir = self._get_smart_initialdir(entry_widget)
         files = filedialog.askopenfilenames(
             title="多選影片檔案 (按住 Ctrl / Shift 鍵可同時圈選多個檔案)",
+            initialdir=init_dir,
             filetypes=[
                 ("影片檔案", "*.mp4 *.mov *.avi *.ts *.mkv *.m4v *.wmv"),
                 ("所有檔案", "*.*")
             ]
         )
         if files:
+            self.last_chosen_dir = os.path.dirname(files[0])
             entry_widget.delete(0, tk.END)
             entry_widget.insert(0, ";".join(files))
 
@@ -2127,31 +2241,42 @@ class RoleStrategyLabApp:
     def _on_batch_done(self, results: list, reports_map: dict, elapsed_total: float):
         self.last_batch_results = results
         self.case_reports_map = reports_map
+        self.user_verifications = {}
 
         self.btn_batch_run.config(state="normal")
         self.btn_batch_csv.config(state="normal")
         self.btn_batch_copy.config(state="normal")
+        self.btn_batch_export_json.config(state="normal")
+        self.btn_batch_export_txt.config(state="normal")
 
         # 清空並重新填入 Treeview
         for item in self.tree_cases.get_children():
             self.tree_cases.delete(item)
 
         for r in results:
+            cid = r["case_id"]
+            self.user_verifications[cid] = {
+                "status": "❓ 未核對",
+                "actual_driver": "",
+                "notes": ""
+            }
             self.tree_cases.insert(
                 "",
                 "end",
-                iid=r["case_id"],
+                iid=cid,
                 values=(
-                    r["case_id"],
+                    cid,
                     r.get("driver", "—"),
                     r.get("attendant", "—"),
                     f"{r.get('confidence', 0)}%",
+                    "❓ 未核對",
                     r.get("evidence", "—")
                 )
             )
 
+        self._update_verify_status_label()
         self.lbl_batch_status.config(
-            text=f"✅ 全日共 {len(results)} 起案件自動判定完成！總耗時僅 {elapsed_total:.2f} 秒！點擊任一案件可查看下方完整對策分析。",
+            text=f"✅ 全日共 {len(results)} 起案件自動判定完成！總耗時僅 {elapsed_total:.2f} 秒！可針對各案進行【人工核對】並一鍵匯出完整診斷封裝包。",
             foreground="#15803D"
         )
 
@@ -2160,6 +2285,141 @@ class RoleStrategyLabApp:
             first_id = results[0]["case_id"]
             self.tree_cases.selection_set(first_id)
             self._show_case_detail_text(reports_map.get(first_id, ""))
+
+    def _set_case_verification(self, status: str):
+        sel = self.tree_cases.selection()
+        if not sel:
+            messagebox.showinfo("提示", "請先在表格中點選要標記核對的案件！")
+            return
+
+        actual_driver = ""
+        notes = ""
+        if status == "❌ 錯誤":
+            ans = self._prompt_actual_driver_dialog(sel[0])
+            if ans is None:
+                return
+            actual_driver, notes = ans
+
+        for cid in sel:
+            self.user_verifications[cid] = {
+                "status": status,
+                "actual_driver": actual_driver,
+                "notes": notes
+            }
+            item_vals = list(self.tree_cases.item(cid, "values"))
+            if len(item_vals) >= 6:
+                display_str = status
+                if actual_driver:
+                    display_str = f"❌ 應為:{actual_driver}"
+                item_vals[4] = display_str
+                self.tree_cases.item(cid, values=item_vals)
+        self._update_verify_status_label()
+
+    def _on_tree_double_click(self, event):
+        item = self.tree_cases.identify_row(event.y)
+        if not item:
+            return
+        cid = item
+        cur_status = self.user_verifications.get(cid, {}).get("status", "❓ 未核對")
+        if cur_status == "❓ 未核對":
+            next_status = "✅ 正確"
+        elif cur_status == "✅ 正確":
+            next_status = "❌ 錯誤"
+        else:
+            next_status = "❓ 未核對"
+
+        actual_driver = ""
+        notes = ""
+        if next_status == "❌ 錯誤":
+            ans = self._prompt_actual_driver_dialog(cid)
+            if ans is not None:
+                actual_driver, notes = ans
+            else:
+                next_status = "❓ 未核對"
+
+        self.user_verifications[cid] = {
+            "status": next_status,
+            "actual_driver": actual_driver,
+            "notes": notes
+        }
+        item_vals = list(self.tree_cases.item(cid, "values"))
+        if len(item_vals) >= 6:
+            display_str = next_status
+            if actual_driver:
+                display_str = f"❌ 應為:{actual_driver}"
+            item_vals[4] = display_str
+            self.tree_cases.item(cid, values=item_vals)
+        self._update_verify_status_label()
+
+    def _prompt_actual_driver_dialog(self, case_id: str):
+        res = next((r for r in self.last_batch_results if r["case_id"] == case_id), None)
+        options = []
+        if res:
+            drv = res.get("driver", "").strip()
+            att = res.get("attendant", "").strip()
+            if drv and drv != "—":
+                options.append(drv)
+            if att and att != "—":
+                for a in att.split("、"):
+                    if a.strip() and a.strip() not in options:
+                        options.append(a.strip())
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"標記錯誤 — 案件【{case_id}】實際正確司機")
+        dialog.geometry("420x230")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        cur_pred = f"司機: {res.get('driver', '—') if res else ''} ｜ 救護手: {res.get('attendant', '—') if res else ''}"
+        tk.Label(dialog, text=f"案件【{case_id}】系統目前判定：\n{cur_pred}", font=("Helvetica", 10, "bold"), justify="left").pack(padx=14, pady=10, anchor="w")
+
+        f_sel = tk.Frame(dialog)
+        f_sel.pack(fill="x", padx=14, pady=4)
+        tk.Label(f_sel, text="實際正確司機為：").pack(side="left")
+        cbo_driver = ttk.Combobox(f_sel, values=options, width=18)
+        if len(options) >= 2:
+            cbo_driver.set(options[1])
+        elif options:
+            cbo_driver.set(options[0])
+        cbo_driver.pack(side="left", padx=4)
+
+        f_note = tk.Frame(dialog)
+        f_note.pack(fill="x", padx=14, pady=4)
+        tk.Label(f_note, text="備註說明 (選填)：").pack(side="left")
+        entry_note = ttk.Entry(f_note, width=22)
+        entry_note.pack(side="left", padx=4, fill="x", expand=True)
+
+        result = [None]
+        def on_ok():
+            chosen_drv = cbo_driver.get().strip()
+            note_txt = entry_note.get().strip()
+            result[0] = (chosen_drv, note_txt)
+            dialog.destroy()
+
+        def on_cancel():
+            result[0] = None
+            dialog.destroy()
+
+        f_btn = tk.Frame(dialog)
+        f_btn.pack(fill="x", padx=14, pady=12)
+        ttk.Button(f_btn, text="確定標記", command=on_ok).pack(side="right", padx=4)
+        ttk.Button(f_btn, text="取消", command=on_cancel).pack(side="right", padx=4)
+
+        self.root.wait_window(dialog)
+        return result[0]
+
+    def _update_verify_status_label(self):
+        if not self.last_batch_results:
+            return
+        total = len(self.last_batch_results)
+        c_correct = sum(1 for v in self.user_verifications.values() if v.get("status") == "✅ 正確")
+        c_wrong = sum(1 for v in self.user_verifications.values() if v.get("status") == "❌ 錯誤")
+        c_un = total - c_correct - c_wrong
+        self.lbl_verify_stats.config(
+            text=f"核對統計：正確 {c_correct} 案 ｜ 錯誤 {c_wrong} 案 ｜ 未確認 {c_un} 案 (點擊上方按鈕可隨時一鍵匯出封裝包)",
+            foreground="#1E40AF" if c_wrong == 0 else "#DC2626"
+        )
 
     def _on_batch_error(self, msg: str):
         self.btn_batch_run.config(state="normal")
@@ -2178,6 +2438,124 @@ class RoleStrategyLabApp:
         self.txt_batch_detail.delete("1.0", tk.END)
         self.txt_batch_detail.insert("1.0", report_text)
 
+    def export_batch_diagnostic_package(self):
+        """
+        一鍵匯出全案件詳細診斷封裝包 (JSON 格式，包含所有案件原始數據、系統判定、各對策得分與人工核對結果)
+        方便同仁一鍵打包整日數據回傳給開發團隊調校演算法！
+        """
+        if not self.last_batch_results:
+            messagebox.showwarning("提示", "目前尚無批次分析結果可供匯出！")
+            return
+
+        default_name = f"EMS_Batch_Diagnostic_Package_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        save_p = filedialog.asksaveasfilename(
+            title="一鍵匯出全案件完整診斷封裝包 (JSON 格式，供回傳分析與演算法調校)",
+            initialfile=default_name,
+            defaultextension=".json",
+            filetypes=[("JSON 完整診斷封裝包", "*.json"), ("所有檔案", "*.*")]
+        )
+        if not save_p:
+            return
+
+        total = len(self.last_batch_results)
+        c_correct = sum(1 for v in self.user_verifications.values() if v.get("status") == "✅ 正確")
+        c_wrong = sum(1 for v in self.user_verifications.values() if v.get("status") == "❌ 錯誤")
+        c_un = total - c_correct - c_wrong
+
+        package = {
+            "export_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "generator": "EMS RoleStrategyLab v3.2 Enhanced",
+            "summary": {
+                "total_cases": total,
+                "verified_correct": c_correct,
+                "verified_wrong": c_wrong,
+                "unverified": c_un,
+                "verified_accuracy_pct": round(c_correct / max(1, c_correct + c_wrong) * 100, 1) if (c_correct + c_wrong) > 0 else None
+            },
+            "cases": []
+        }
+
+        for r in self.last_batch_results:
+            cid = r["case_id"]
+            v_info = self.user_verifications.get(cid, {"status": "❓ 未核對", "actual_driver": "", "notes": ""})
+            case_entry = {
+                "case_id": cid,
+                "system_prediction": {
+                    "driver": r.get("driver", "—"),
+                    "attendant": r.get("attendant", "—"),
+                    "confidence": r.get("confidence", 0),
+                    "driver_score": r.get("driver_score", 0.0),
+                    "attendant_score": r.get("attendant_score", 0.0),
+                    "evidence": r.get("evidence", "")
+                },
+                "user_verification": v_info,
+                "report_summary": r.get("report_obj", {}),
+                "report_text": self.case_reports_map.get(cid, "")
+            }
+            package["cases"].append(case_entry)
+
+        try:
+            with open(save_p, "w", encoding="utf-8") as f:
+                json.dump(package, f, ensure_ascii=False, indent=2)
+            messagebox.showinfo(
+                "匯出成功",
+                f"✅ 已成功將 {total} 筆案件完整診斷數據與人工核對資訊打包匯出！\n\n檔案路徑：\n{save_p}\n\n您可以直接將此 JSON 檔彙整提供給開發人員進行進一步的特徵校準與分析！"
+            )
+        except Exception as e:
+            messagebox.showerror("匯出失敗", f"寫入 JSON 封裝包時發生錯誤：\n{e}")
+
+    def export_batch_all_reports_txt(self):
+        """匯出全案文字診斷報告 (TXT 格式)"""
+        if not self.last_batch_results:
+            return
+        default_name = f"EMS_Batch_All_Reports_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        save_p = filedialog.asksaveasfilename(
+            title="匯出全案文字診斷報告 (TXT 格式)",
+            initialfile=default_name,
+            defaultextension=".txt",
+            filetypes=[("文字報告", "*.txt"), ("所有檔案", "*.*")]
+        )
+        if not save_p:
+            return
+
+        total = len(self.last_batch_results)
+        c_correct = sum(1 for v in self.user_verifications.values() if v.get("status") == "✅ 正確")
+        c_wrong = sum(1 for v in self.user_verifications.values() if v.get("status") == "❌ 錯誤")
+
+        lines = [
+            "=" * 80,
+            "🚑 救護車「司機 vs. 救護手」全日案件批次自動判定 ＆ 人工核對總覽報告",
+            f"產出時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ｜ 總案件數：{total} 件",
+            f"人工核對統計：正確 {c_correct} 件 / 錯誤 {c_wrong} 件 / 未確認 {total - c_correct - c_wrong} 件",
+            "=" * 80,
+            "",
+            "【各案判定與查核結果摘要表】",
+            f"{'案號':<20} | {'判定司機':<16} | {'判定救護手':<16} | {'信心度':<6} | {'人工核對'}",
+            "-" * 80,
+        ]
+        for r in self.last_batch_results:
+            cid = r["case_id"]
+            v = self.user_verifications.get(cid, {}).get("status", "未核對")
+            act = self.user_verifications.get(cid, {}).get("actual_driver", "")
+            if act:
+                v += f" (應為:{act})"
+            lines.append(f"{cid:<20} | {r.get('driver','—'):<16} | {r.get('attendant','—'):<16} | {r.get('confidence',0):>3}% | {v}")
+        lines.append("=" * 80)
+        lines.append("\n\n" + ("=" * 80 + "\n"))
+
+        for r in self.last_batch_results:
+            cid = r["case_id"]
+            lines.append(f"=== 案件編號：【{cid}】詳細對策診斷報告 ===")
+            lines.append(self.case_reports_map.get(cid, "（無報告內文）"))
+            lines.append("\n" + ("-" * 80) + "\n")
+
+        try:
+            with open(save_p, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+            messagebox.showinfo("匯出成功", f"全案文字診斷報告已匯出完成：\n{save_p}")
+        except Exception as e:
+            messagebox.showerror("匯出失敗", f"寫入檔案時發生錯誤：\n{e}")
+
     def export_batch_csv(self):
         if not self.last_batch_results:
             return
@@ -2192,13 +2570,18 @@ class RoleStrategyLabApp:
             try:
                 with open(save_p, "w", encoding="utf-8-sig", newline="") as f:
                     writer = csv.writer(f)
-                    writer.writerow(["案件編號", "判定司機 (駕駛)", "判定救護手 (副手)", "信心度", "主要判定關鍵依據", "司機評分", "救護手評分"])
+                    writer.writerow(["案件編號", "判定司機 (駕駛)", "判定救護手 (副手)", "信心度", "人工核對結果", "實際正確司機", "核對備註", "主要判定依據", "司機評分", "救護手評分"])
                     for r in self.last_batch_results:
+                        cid = r.get("case_id", "")
+                        v = self.user_verifications.get(cid, {})
                         writer.writerow([
-                            r.get("case_id", ""),
+                            cid,
                             r.get("driver", ""),
                             r.get("attendant", ""),
                             f"{r.get('confidence', 0)}%",
+                            v.get("status", "未核對"),
+                            v.get("actual_driver", ""),
+                            v.get("notes", ""),
                             r.get("evidence", ""),
                             r.get("driver_score", ""),
                             r.get("attendant_score", "")
