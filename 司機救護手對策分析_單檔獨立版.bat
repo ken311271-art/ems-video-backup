@@ -364,14 +364,18 @@ class FastMP4Inspector:
         info["start_str"] = datetime.fromtimestamp(info["start_ts"]).strftime("%H:%M:%S")
         info["end_str"] = datetime.fromtimestamp(info["end_ts"]).strftime("%H:%M:%S")
 
-        # 👑 若具備 FFmpeg (包含本機綠色免安裝版 ffmpeg.exe)，執行真實空間視覺「多時序點」真實畫面解碼抽樣
+        # 👑 若具備 FFmpeg (包含本機綠色免安裝版 ffmpeg.exe)，執行真實空間視覺「每分鐘採樣一張真實畫面」解碼抽樣
         if ext in VIDEO_EXTENSIONS:
-            if dur >= 30.0:
-                sample_secs = [dur * 0.25, dur * 0.50, dur * 0.75]
-            elif dur >= 10.0:
-                sample_secs = [dur * 0.35, dur * 0.70]
+            if dur < 30.0:
+                sample_secs = [round(max(0.5, dur * 0.5), 1)]
             else:
-                sample_secs = [max(0.5, dur * 0.5)]
+                sample_secs = []
+                t = 30.0
+                while t <= dur - 5.0:
+                    sample_secs.append(round(t, 1))
+                    t += 60.0
+                if not sample_secs:
+                    sample_secs = [round(dur * 0.5, 1)]
 
             frame_results = []
             for s_sec in sample_secs:
@@ -381,16 +385,16 @@ class FastMP4Inspector:
                     frame_results.append(v_res)
 
             if frame_results:
-                # 穩健多點綜合統計 (避免單一影格低頭、晃動或剛好拍到平板之假陽性)
+                # 穩健多點綜合統計 (每分鐘真實影格採樣，徹底消除單影格低頭、晃動或剛好拍到平板之假陽性)
                 sw_list = [r["score"] for r in frame_results]
                 dark_list = [r["dark_ratio"] for r in frame_results]
                 contrast_list = [r["contrast_ratio"] for r in frame_results]
 
                 info["steering_wheel_arc_score"] = round(sum(sw_list) / len(sw_list), 1)
-                info["steering_wheel_detected"] = sum(1 for r in frame_results if r["detected"]) >= (len(frame_results) // 2 + 1)
+                info["steering_wheel_detected"] = sum(1 for r in frame_results if r["detected"]) >= max(1, len(frame_results) // 2)
                 info["lower_wheel_darkness_ratio"] = round(sum(dark_list) / len(dark_list), 4)
                 info["upper_windshield_ratio"] = round(sum(contrast_list) / len(contrast_list), 3)
-                info["visual_source"] = f"ffmpeg_real_frame_x{len(frame_results)}"
+                info["visual_source"] = f"ffmpeg_real_frame_1min_x{len(frame_results)}"
                 info["visual_samples_count"] = len(frame_results)
 
         info["parse_ms"] = round((time.perf_counter() - t0) * 1000, 2)
