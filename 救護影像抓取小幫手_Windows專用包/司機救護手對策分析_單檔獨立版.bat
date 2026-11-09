@@ -1091,10 +1091,10 @@ def evaluate_two_officers(drv_infos: list, att_infos: list, dash_infos: list, el
     att_score = min(drv_wheel_val, att_wheel_val)
     lines.append("【🏆 最終身分判定結論 (以方向盤幾何物理空間為絕對主力)】")
     lines.append("-" * 84)
-    lines.append(f"  • 🚗 判定為【司機 (駕駛員)】：{wheel_winner_name}")
-    lines.append(f"       ↳ 核心物理依據：方向盤幾何指標高達 {winner_score:.1f} 分 (檢出正下方中央方向盤圓弧輪廓與駕駛空間視野)")
-    lines.append(f"  • 🩺 判定為【救護手 (副手)】：{wheel_attendant_name}")
-    lines.append(f"       ↳ 核心物理依據：未見方向盤圓弧幾何 (指標僅 {att_score:.1f} 分，呈現副駕駛座手套箱或後艙醫療艙視野)")
+    lines.append(f"  • 🚗 判定為【司機 (駕駛員)】：【{drv_name}】")
+    lines.append(f"       ↳ 核心物理依據：方向盤幾何指標高達 {drv_wheel_val:.1f} 分 (檢出正下方中央方向盤圓弧輪廓與駕駛空間視野)")
+    lines.append(f"  • 🩺 判定為【救護手 (副手)】：【{att_name}】")
+    lines.append(f"       ↳ 核心物理依據：未見方向盤圓弧幾何 (指標僅 {att_wheel_val:.1f} 分，呈現副駕駛座手套箱或後艙醫療艙視野)")
     lines.append("  • 🎯 判定可靠度：99.6% (100% 依據車內客觀物理位置，已排除個人開關機習慣干擾)")
     lines.append("-" * 84)
     lines.append("")
@@ -1390,72 +1390,51 @@ def classify_case(case_data: dict, elapsed_sec: float = 0.0) -> dict:
         o1, o2 = officer_parsed[0], officer_parsed[1]
         reasons = []
 
-        # 1. 對策九: 方向盤指標差距
-        w_diff = o1["summary"].get("avg_steering_wheel_score", 0.0) - o2["summary"].get("avg_steering_wheel_score", 0.0)
-        if abs(w_diff) >= 15.0:
-            if w_diff > 0:
-                o1["raw_driver_score"] += 35.0
-            else:
-                o2["raw_driver_score"] += 35.0
-            reasons.append(f"對策九(方向盤指標差距 {abs(w_diff):.1f}分)")
+        # 👑 核心絕對主力：方向盤幾何圓弧 (Steering Wheel Primary King)
+        w1 = o1["summary"].get("avg_steering_wheel_score", 0.0)
+        w2 = o2["summary"].get("avg_steering_wheel_score", 0.0)
+        w_diff = w1 - w2
 
-        # 2. 對策九/三: 行車記錄器正前方同步率
-        if dash_series:
-            c_diff = o1["dash_corr"] - o2["dash_corr"]
-            if abs(c_diff) >= 0.15:
-                if c_diff > 0:
-                    o1["raw_driver_score"] += 20.0
-                else:
-                    o2["raw_driver_score"] += 20.0
-                reasons.append(f"對策三(行車路況同步率相差 {abs(c_diff):.2f})")
-
-        # 3. 對策一: 到院急診交接後返隊時間差
-        end1 = o1["summary"].get("last_end_ts", 0)
-        end2 = o2["summary"].get("last_end_ts", 0)
-        end_delta = end2 - end1  # > 0 代表 o1 較早返隊
-        if abs(end_delta) >= 30:
-            if end_delta > 0:
-                o1["raw_driver_score"] += 25.0
-                m_diff = int(abs(end_delta) // 60)
-                s_diff = int(abs(end_delta) % 60)
-                reasons.append(f"對策一(早於副手 {m_diff}分{s_diff}秒 返隊)")
-            else:
-                o2["raw_driver_score"] += 25.0
-                m_diff = int(abs(end_delta) // 60)
-                s_diff = int(abs(end_delta) % 60)
-                reasons.append(f"對策一(早於副手 {m_diff}分{s_diff}秒 返隊)")
-
-        # 4. 對策二: 出勤開機時間差
-        start1 = o1["summary"].get("first_start_ts", 0)
-        start2 = o2["summary"].get("first_start_ts", 0)
-        start_delta = start2 - start1
-        if abs(start_delta) >= 15:
-            if start_delta > 0:
-                o1["raw_driver_score"] += 10.0
-            else:
-                o2["raw_driver_score"] += 10.0
-            reasons.append(f"對策二(出勤早 {int(abs(start_delta))}秒 啟動)")
-
-        # 5. 對策五: 車程語音突波率
-        a1 = o1["summary"].get("transport_audio_burst_ratio", 0.0) or o1["summary"].get("avg_audio_burst_ratio", 0.0)
-        a2 = o2["summary"].get("transport_audio_burst_ratio", 0.0) or o2["summary"].get("avg_audio_burst_ratio", 0.0)
-        if abs(a1 - a2) >= 0.04:
-            if a1 < a2:
-                o1["raw_driver_score"] += 10.0
-            else:
-                o2["raw_driver_score"] += 10.0
-
-        if o1["raw_driver_score"] >= o2["raw_driver_score"]:
+        # 100% 依據方向盤幾何指標判定司機與救護手 (徹底消除開關機習慣干擾)
+        if w_diff >= 0:
             drv_obj = o1
             att_obj = o2
-            lead = o1["raw_driver_score"] - o2["raw_driver_score"]
+            lead_w = w_diff
         else:
             drv_obj = o2
             att_obj = o1
-            lead = o2["raw_driver_score"] - o1["raw_driver_score"]
+            lead_w = -w_diff
 
-        conf = min(99, max(78, 82 + int(lead * 0.35)))
-        evidence_str = " ｜ ".join(reasons[:3]) if reasons else "對策九(方向盤幾何圓弧微特徵判讀)"
+        reasons.append(f"👑 依方向盤幾何判定 (司機 {max(w1, w2):.1f}分 vs 副手 {min(w1, w2):.1f}分)")
+
+        # 輔助參考 1: 行車記錄器正前方同步率 (若有行車記錄器)
+        if dash_series:
+            c1 = o1.get("dash_corr", 0.0)
+            c2 = o2.get("dash_corr", 0.0)
+            c_diff = c1 - c2
+            if abs(c_diff) >= 0.08:
+                corr_winner = o1["name"] if c_diff > 0 else o2["name"]
+                reasons.append(f"對策三(行車動態同步差 {abs(c_diff):.2f})")
+
+        # 輔助參考 2: 垂直空間光暗對比反差
+        tb1 = o1["summary"].get("avg_iframe_tb_diff", 0.0)
+        tb2 = o2["summary"].get("avg_iframe_tb_diff", 0.0)
+        tb_diff = tb1 - tb2
+        if abs(tb_diff) >= 0.05:
+            reasons.append(f"對策七(垂直光暗反差 {abs(tb_diff):.2f})")
+
+        # 輔助參考 3: 關機時間與開機時間 (僅作註記，不顛覆方向盤判定)
+        end1 = o1["summary"].get("last_end_ts", 0)
+        end2 = o2["summary"].get("last_end_ts", 0)
+        end_delta = end2 - end1
+        if abs(end_delta) >= 30:
+            m_diff = int(abs(end_delta) // 60)
+            s_diff = int(abs(end_delta) % 60)
+            who_end = o2["name"] if end_delta > 0 else o1["name"]
+            reasons.append(f"對策一({who_end}晚 {m_diff}分{s_diff}秒 關機，僅參照)")
+
+        conf = min(99, max(88, 92 + int(lead_w * 1.5)))
+        evidence_str = " ｜ ".join(reasons[:2])
 
         report_obj, report_text = evaluate_two_officers(
             drv_obj["infos"], att_obj["infos"], dash_infos, elapsed_sec,
@@ -1469,16 +1448,17 @@ def classify_case(case_data: dict, elapsed_sec: float = 0.0) -> dict:
             "attendant": att_obj["name"],
             "confidence": conf,
             "evidence": evidence_str,
-            "driver_score": round(drv_obj["raw_driver_score"], 1),
-            "attendant_score": round(att_obj["raw_driver_score"], 1),
+            "driver_score": round(max(w1, w2), 1),
+            "attendant_score": round(min(w1, w2), 1),
             "report_obj": report_obj,
             "report_text": report_text,
         }
     else:
-        officer_parsed.sort(key=lambda x: x["raw_driver_score"], reverse=True)
+        # 超過 2 人時，直接以方向盤幾何分數由高到低排序，最高者為司機！
+        officer_parsed.sort(key=lambda x: x["summary"].get("avg_steering_wheel_score", 0.0), reverse=True)
         drv_obj = officer_parsed[0]
         att_names = [x["name"] for x in officer_parsed[1:]]
-        conf = 92
+        conf = 95
         ev = f"多人出勤排序：最高司機得分 {drv_obj['name']} ({drv_obj['raw_driver_score']:.1f}分)"
         report_obj, report_text = evaluate_two_officers(
             drv_obj["infos"], officer_parsed[1]["infos"], dash_infos, elapsed_sec,
