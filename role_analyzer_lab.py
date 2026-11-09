@@ -318,17 +318,34 @@ class FastMP4Inspector:
         info["start_str"] = datetime.fromtimestamp(info["start_ts"]).strftime("%H:%M:%S")
         info["end_str"] = datetime.fromtimestamp(info["end_ts"]).strftime("%H:%M:%S")
 
-        # 👑 若具備 FFmpeg (包含本機綠色免安裝版 ffmpeg.exe)，執行真實空間視覺影格抽樣與物理特徵解析
+        # 👑 若具備 FFmpeg (包含本機綠色免安裝版 ffmpeg.exe)，執行真實空間視覺「多時序點」真實畫面解碼抽樣
         if ext in VIDEO_EXTENSIONS:
-            sample_sec = max(1.0, min(dur * 0.5, max(1.0, dur - 1.0)))
-            w, h, p_bytes = VisualFrameAnalyzer.extract_frame_ppm(filepath, timestamp_sec=sample_sec)
-            if p_bytes:
-                v_res = VisualFrameAnalyzer.analyze_frame_pixels(w, h, p_bytes)
-                info["steering_wheel_arc_score"] = v_res["score"]
-                info["steering_wheel_detected"] = v_res["detected"]
-                info["lower_wheel_darkness_ratio"] = v_res["dark_ratio"]
-                info["upper_windshield_ratio"] = v_res["contrast_ratio"]
-                info["visual_source"] = "ffmpeg_real_frame"
+            if dur >= 30.0:
+                sample_secs = [dur * 0.25, dur * 0.50, dur * 0.75]
+            elif dur >= 10.0:
+                sample_secs = [dur * 0.35, dur * 0.70]
+            else:
+                sample_secs = [max(0.5, dur * 0.5)]
+
+            frame_results = []
+            for s_sec in sample_secs:
+                w, h, p_bytes = VisualFrameAnalyzer.extract_frame_ppm(filepath, timestamp_sec=s_sec)
+                if p_bytes:
+                    v_res = VisualFrameAnalyzer.analyze_frame_pixels(w, h, p_bytes)
+                    frame_results.append(v_res)
+
+            if frame_results:
+                # 穩健多點綜合統計 (避免單一影格低頭、晃動或剛好拍到平板之假陽性)
+                sw_list = [r["score"] for r in frame_results]
+                dark_list = [r["dark_ratio"] for r in frame_results]
+                contrast_list = [r["contrast_ratio"] for r in frame_results]
+
+                info["steering_wheel_arc_score"] = round(sum(sw_list) / len(sw_list), 1)
+                info["steering_wheel_detected"] = sum(1 for r in frame_results if r["detected"]) >= (len(frame_results) // 2 + 1)
+                info["lower_wheel_darkness_ratio"] = round(sum(dark_list) / len(dark_list), 4)
+                info["upper_windshield_ratio"] = round(sum(contrast_list) / len(contrast_list), 3)
+                info["visual_source"] = f"ffmpeg_real_frame_x{len(frame_results)}"
+                info["visual_samples_count"] = len(frame_results)
 
         info["parse_ms"] = round((time.perf_counter() - t0) * 1000, 2)
         return info
