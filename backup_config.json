@@ -51,5 +51,9 @@
   "roster_path": "",
   "update_dir": "",
   "hide_base_settings": false,
-  "station_name": "消防分隊"
+  "station_name": "消防分隊",
+  "dashcam_keywords": "CARDV, NORMAL, EVENT, PARK, MOVIE, TS, EMR, FRONT, REAR, CAR_DVR",
+  "dashcam_fn_patterns": "_F., _R., NORMAL_, EVENT_",
+  "bodycam_keywords": "DCIM, 100MEDIA, 100DSCIM, RECORD, VIDEO, AUDIO, PHOTO, BODYCAM, POLICE, AEE, TRANSCEND",
+  "time_buffer_minutes": 15
 }

@@ -34,5 +34,9 @@
     "隊員R",
     "隊員S",
     "隊員T"
-  ]
+  ],
+  "dashcam_keywords": "CARDV, NORMAL, EVENT, PARK, MOVIE, TS, EMR, FRONT, REAR, CAR_DVR",
+  "dashcam_fn_patterns": "_F., _R., NORMAL_, EVENT_",
+  "bodycam_keywords": "DCIM, 100MEDIA, 100DSCIM, RECORD, VIDEO, AUDIO, PHOTO, BODYCAM, POLICE, AEE, TRANSCEND",
+  "time_buffer_minutes": 15
 }
