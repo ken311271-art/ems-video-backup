@@ -3065,6 +3065,9 @@ class ArchiveTaskTab(ttk.Frame):
 
     def swap_1_2(self):
         """互換密錄器 1 與 2 之同仁姓名"""
+        if str(self.entry_name1.cget("state")) == "disabled" or str(self.entry_name2.cget("state")) == "disabled":
+            messagebox.showinfo("無法對調", "密錄器 1 或 密錄器 2 尚未連線（反灰關閉），無法對調姓名！\n請先插上設備並完成連線。")
+            return
         n1 = self.entry_name1.get().strip()
         n2 = self.entry_name2.get().strip()
         self.entry_name1.set(n2)
@@ -3074,13 +3077,11 @@ class ArchiveTaskTab(ttk.Frame):
 
     def swap_2_3(self):
         """互換密錄器 2 與 3 之同仁姓名"""
+        if str(self.entry_name2.cget("state")) == "disabled" or str(self.entry_name3.cget("state")) == "disabled":
+            messagebox.showinfo("無法對調", "密錄器 2 或 密錄器 3 尚未連線（反灰關閉），無法對調姓名！\n請先插上設備並完成連線。")
+            return
         n2 = self.entry_name2.get().strip()
         n3 = self.entry_name3.get().strip()
-        # 若 3 號原為鎖定狀態，且換入有人名，自動解鎖 3 號以利使用
-        if n2 and str(self.entry_name3.cget("state")) == "disabled":
-            self.entry_name3.config(state="normal")
-            self.lbl_status_name3.config(text="🔓 已開放/解鎖", foreground="#E65100")
-            self.btn_manual_unlock3.config(text="🔒 手動鎖定")
         self.entry_name2.set(n3)
         self.entry_name3.set(n2)
         self.log(f"🔄 [同仁姓名互換] 密錄器 2 ⇄ 密錄器 3 姓名已成功對調！({n2 or '空'} ⇄ {n3 or '空'})")
@@ -3088,12 +3089,11 @@ class ArchiveTaskTab(ttk.Frame):
 
     def swap_1_3(self):
         """互換密錄器 1 與 3 之同仁姓名"""
+        if str(self.entry_name1.cget("state")) == "disabled" or str(self.entry_name3.cget("state")) == "disabled":
+            messagebox.showinfo("無法對調", "密錄器 1 或 密錄器 3 尚未連線（反灰關閉），無法對調姓名！\n請先插上設備並完成連線。")
+            return
         n1 = self.entry_name1.get().strip()
         n3 = self.entry_name3.get().strip()
-        if n1 and str(self.entry_name3.cget("state")) == "disabled":
-            self.entry_name3.config(state="normal")
-            self.lbl_status_name3.config(text="🔓 已開放/解鎖", foreground="#E65100")
-            self.btn_manual_unlock3.config(text="🔒 手動鎖定")
         self.entry_name1.set(n3)
         self.entry_name3.set(n1)
         self.log(f"🔄 [同仁姓名互換] 密錄器 1 ⇄ 密錄器 3 姓名已成功對調！({n1 or '空'} ⇄ {n3 or '空'})")
@@ -3101,15 +3101,15 @@ class ArchiveTaskTab(ttk.Frame):
 
     def rotate_names(self):
         """密錄器 1 ➔ 2 ➔ 3 順時針姓名順序輪替"""
+        if (str(self.entry_name1.cget("state")) == "disabled" or
+            str(self.entry_name2.cget("state")) == "disabled" or
+            str(self.entry_name3.cget("state")) == "disabled"):
+            messagebox.showinfo("無法輪替", "3 人輪替需 3 部密錄器皆連線開放！\n目前有部分設備未連線（反灰關閉），請先使用雙人對調按鈕。")
+            return
         n1 = self.entry_name1.get().strip()
         n2 = self.entry_name2.get().strip()
         n3 = self.entry_name3.get().strip()
-        # 輪替：1號到2號、2號到3號、3號到1號
         new_1, new_2, new_3 = n3, n1, n2
-        if new_3 and str(self.entry_name3.cget("state")) == "disabled":
-            self.entry_name3.config(state="normal")
-            self.lbl_status_name3.config(text="🔓 已開放/解鎖", foreground="#E65100")
-            self.btn_manual_unlock3.config(text="🔒 手動鎖定")
         self.entry_name1.set(new_1)
         self.entry_name2.set(new_2)
         self.entry_name3.set(new_3)
@@ -3125,26 +3125,14 @@ class ArchiveTaskTab(ttk.Frame):
         pass
 
     def toggle_manual_unlock3(self):
-        """手動切換密錄器 3 同仁輸入欄位之鎖定/解鎖狀態"""
-        curr_state = str(self.entry_name3.cget("state"))
-        if curr_state == "disabled":
-            self.entry_name3.config(state="normal")
-            self.lbl_status_name3.config(text="🔓 已手動解鎖 (待換卡)", foreground="#E65100")
-            self.btn_manual_unlock3.config(text="🔒 手動鎖定")
-            self.log("ℹ️ 已手動解鎖密錄器 3 同仁輸入欄位 (待換卡)。")
-        else:
-            self.entry_name3.set("")
-            self.entry_name3.config(state="disabled")
-            self.btn_manual_unlock3.config(text="🔓 手動解鎖")
-            self.lbl_status_name3.config(text="⚪ 未連線 (共用槽)", foreground="#888888")
-            self.log("ℹ️ 已手動鎖定並清空密錄器 3 同仁輸入欄位。")
-            self.refresh_device_connections()
+        """相容舊版手動解鎖按鈕呼叫"""
+        self.refresh_device_connections()
 
     def refresh_device_connections(self, show_toast=False):
-        """【出勤設備連線狀態刷新 ＆ 智慧寬容驗證】
-        自動比對行車紀錄器與密錄器 1、2、3 之連線狀態。
-        全面支援公務機 3 個 USB 插槽限制與隨身碟動態分派，不再因標籤名稱或代碼變更鎖定欄位。
-        同仁姓名輸入欄位隨時保持開放填寫。
+        """【出勤設備連線狀態刷新 ＆ 動態反灰防呆】
+        先偵測哪一個設備有插進去：
+        • 有連線之設備：開放輸入欄位（state="normal"，白色底色，可選取或修改姓名）。
+        • 沒連線之設備：直接關閉反灰（state="disabled"，禁止點選，並清空文字）。
         """
         label_dash = self.app.config.get("label_dashcam", "DASHCAM").strip()
         label_b1 = self.app.config.get("label_bodycam1", "BODYCAM1").strip()
@@ -3170,24 +3158,29 @@ class ArchiveTaskTab(ttk.Frame):
         curr_b2 = self.entry_bodycam2_src.get().strip()
         curr_b3 = self.entry_bodycam3_src.get().strip()
 
-        # 姓名輸入框一律開放編輯，徹底杜絕輸入被封鎖
-        self.entry_name1.config(state="normal")
-        self.entry_name2.config(state="normal")
-        self.entry_name3.config(state="normal")
-
-        # 1. 密錄器 1 驗證
+        # 1. 密錄器 1 驗證與開放/反灰控制
         is_b1, msg_b1 = is_device_connected(curr_b1, label_b1)
         if is_b1:
             self.lbl_status_name1.config(text=f"🟢 {msg_b1}", foreground="#2E7D32")
+            self.entry_name1.config(state="normal")
         else:
             self.lbl_status_name1.config(text="⚪ 未連線", foreground="#888888")
+            if str(self.entry_name1.cget("state")) != "normal":
+                self.entry_name1.config(state="normal")
+            self.entry_name1.set("")
+            self.entry_name1.config(state="disabled")
 
-        # 2. 密錄器 2 驗證
+        # 2. 密錄器 2 驗證與開放/反灰控制
         is_b2, msg_b2 = is_device_connected(curr_b2, label_b2)
         if is_b2:
             self.lbl_status_name2.config(text=f"🟢 {msg_b2}", foreground="#2E7D32")
+            self.entry_name2.config(state="normal")
         else:
             self.lbl_status_name2.config(text="⚪ 未連線", foreground="#888888")
+            if str(self.entry_name2.cget("state")) != "normal":
+                self.entry_name2.config(state="normal")
+            self.entry_name2.set("")
+            self.entry_name2.config(state="disabled")
 
         # 3. 行車紀錄器驗證
         is_dash, msg_dash = is_device_connected(curr_dash, label_dash)
@@ -3197,22 +3190,17 @@ class ArchiveTaskTab(ttk.Frame):
             else:
                 self.lbl_status_dashcam.config(text="⚪ 未連線", foreground="#888888")
 
-        # 4. 密錄器 3 驗證 (智慧適配 3 孔電腦硬體限制)
+        # 4. 密錄器 3 驗證與開放/反灰控制
         is_b3, msg_b3 = is_device_connected(curr_b3, label_b3)
-        name3_val = self.entry_name3.get().strip() if hasattr(self, 'entry_name3') else ""
         if is_b3:
             self.lbl_status_name3.config(text=f"🟢 {msg_b3}", foreground="#2E7D32")
-            if hasattr(self, 'btn_manual_unlock3'):
-                self.btn_manual_unlock3.config(text="🔒 手動鎖定")
-        elif name3_val and is_dash and is_b1 and is_b2:
-            # 3人出勤但受限於 3 個 USB 插槽，行車與前兩台密錄器已就緒，第3台標記為分批換插
-            self.lbl_status_name3.config(text="⏳ 待換插 (3孔電腦分批複製)", foreground="#E65100")
-            if hasattr(self, 'btn_manual_unlock3'):
-                self.btn_manual_unlock3.config(text="🔓 手動解鎖")
+            self.entry_name3.config(state="normal")
         else:
             self.lbl_status_name3.config(text="⚪ 未連線", foreground="#888888")
-            if hasattr(self, 'btn_manual_unlock3'):
-                self.btn_manual_unlock3.config(text="🔓 手動解鎖")
+            if str(self.entry_name3.cget("state")) != "normal":
+                self.entry_name3.config(state="normal")
+            self.entry_name3.set("")
+            self.entry_name3.config(state="disabled")
 
         if show_toast:
             dash_txt = self.lbl_status_dashcam.cget("text") if hasattr(self, 'lbl_status_dashcam') else ""
@@ -3538,6 +3526,7 @@ class ArchiveTaskTab(ttk.Frame):
             summary_lines.append(f"🚗 行車紀錄器：已鎖定 {p} ({dash_info['label']}，{info_str})")
             assigned_dash = True
         else:
+            self.entry_dashcam_src.delete(0, tk.END)
             summary_lines.append("🚗 行車紀錄器：⚪ 未偵測到 (待插上讀卡機)")
 
         if len(body_list) >= 1:
@@ -3549,6 +3538,7 @@ class ArchiveTaskTab(ttk.Frame):
             summary_lines.append(f"📹 密錄器 1：已鎖定 {p1} ({body_list[0]['label']}，{info1})")
             assigned_b1 = True
         else:
+            self.entry_bodycam1_src.delete(0, tk.END)
             summary_lines.append("📹 密錄器 1：⚪ 未偵測到")
 
         if len(body_list) >= 2:
@@ -3560,9 +3550,9 @@ class ArchiveTaskTab(ttk.Frame):
             summary_lines.append(f"📹 密錄器 2：已鎖定 {p2} ({body_list[1]['label']}，{info2})")
             assigned_b2 = True
         else:
+            self.entry_bodycam2_src.delete(0, tk.END)
             summary_lines.append("📹 密錄器 2：⚪ 未偵測到")
 
-        has_3rd_officer = bool(self.entry_name3.get().strip() if hasattr(self, 'entry_name3') else "")
         if len(body_list) >= 3:
             p3 = body_list[2]['path']
             self.entry_bodycam3_src.delete(0, tk.END)
@@ -3571,8 +3561,9 @@ class ArchiveTaskTab(ttk.Frame):
             info3 = f"含時段影像 {cnt3} 部" if start_dt else f"{body_list[2]['all_videos_count']} 部影片"
             summary_lines.append(f"📹 密錄器 3：已鎖定 {p3} ({body_list[2]['label']}，{info3})")
             assigned_b3 = True
-        elif has_3rd_officer:
-            summary_lines.append("📹 密錄器 3：⏳ 待第二階段換插 (受限於電腦 3 孔限制，第一階段完成後將自動引導換插)")
+        else:
+            self.entry_bodycam3_src.delete(0, tk.END)
+            summary_lines.append("📹 密錄器 3：⚪ 未偵測到")
 
         self.app.save_config()
         self.refresh_device_connections(show_toast=False)
@@ -3592,12 +3583,15 @@ class ArchiveTaskTab(ttk.Frame):
 
     def clear_all_officers(self):
         """【🧹 清空全體人員】將密錄器 1、2、3 之出勤同仁姓名全數清空"""
-        if hasattr(self, 'entry_name1'):
-            self.entry_name1.set("")
-        if hasattr(self, 'entry_name2'):
-            self.entry_name2.set("")
-        if hasattr(self, 'entry_name3'):
-            self.entry_name3.set("")
+        for entry in (getattr(self, 'entry_name1', None), getattr(self, 'entry_name2', None), getattr(self, 'entry_name3', None)):
+            if entry:
+                st = str(entry.cget("state"))
+                if st == "disabled":
+                    entry.config(state="normal")
+                    entry.set("")
+                    entry.config(state="disabled")
+                else:
+                    entry.set("")
         self.log("🧹 [清空人員] 已全數清空密錄器 1、2、3 之出勤同仁姓名。")
         self.update_status("狀態：已清空全體出勤同仁姓名", "#555555")
 
@@ -3817,35 +3811,29 @@ class ArchiveTaskTab(ttk.Frame):
             return
 
         # 1. 先刷新設備連線，確保取得各密錄器最新連線與開放狀態
-        # 嚴格遵循：看使用者插入哪幾個密錄器，才開放有連線的密錄器；未連線者保持鎖定
+        # 嚴格遵循：看使用者插入哪幾個密錄器，才開放有連線的密錄器；未連線者直接關閉（反灰）不給點選
         self.refresh_device_connections(show_toast=False)
 
         # 2. 取得所有目前「開放／已連線」之密錄器插槽 (按 1 -> 2 -> 3 順序)
-        bodycam_slots = [
+        open_slots = []
+        for idx, entry, lbl_status in [
             (1, self.entry_name1, self.lbl_status_name1),
             (2, self.entry_name2, self.lbl_status_name2),
             (3, self.entry_name3, self.lbl_status_name3),
-        ]
-
-        open_slots = []
-        for idx, entry, lbl_status in bodycam_slots:
+        ]:
             if str(entry.cget("state")) == "normal":
                 open_slots.append((idx, entry))
-            else:
-                # 未開放/未連線之密錄器清空並維持鎖定
-                entry.config(state="normal")
-                entry.set("")
-                entry.config(state="disabled")
 
         if not open_slots:
             messagebox.showwarning(
-                "無連線開放之密錄器",
-                "目前未偵測到任何已連線或開放之密錄器！\n\n請先插入密錄器隨身碟並點擊【🔄 重新刷新連線】，或點擊密錄器 3 的【🔓 手動解鎖】後再帶入排班。"
+                "未偵測到連線設備",
+                "目前未偵測到任何已插上且連線之密錄器！\n\n請先將密錄器插入電腦 USB 孔後，\n再點擊【⚡ 一鍵智慧偵測連線 ＆ 刷新排班】。"
             )
+            self.update_status("狀態：未找到已連線之密錄器設備", "#C62828")
             return
 
-        # 3. 依序填入有連接/開放的密錄器上
-        # 若要填入的人員數 > 開放密錄器數，則只填有連接的密錄器即可
+        # 3. 針對有開放（連線）之設備依序填入勤務人員：
+        # 核心防呆邏輯：若插進的設備只有 1 個，但有 2 名勤務人員，則只填入連線的 1 位即可，其餘反灰關閉
         assigned_records = []
         for i, (idx, entry) in enumerate(open_slots):
             if i < len(names):
@@ -3858,8 +3846,8 @@ class ArchiveTaskTab(ttk.Frame):
         prev_label = f" (前一日 {duty_month:02d}/{duty_day:02d} 凌晨勤務)" if is_prev else ""
         if len(names) > len(open_slots):
             log_msg = (
-                f"⚡ 成功自勤務表【{file_name}】取得 {len(names)} 位同仁，已依序填入已連線開放之 {len(open_slots)} 部密錄器："
-                f"{'、'.join(assigned_records)} (時段 [{time_slot_str}]{prev_label})"
+                f"⚡ 成功自勤務表【{file_name}】取得 {len(names)} 位排班同仁（{'、'.join(names)}），"
+                f"因目前電腦僅連線 {len(open_slots)} 部密錄器，已依序填入已連線之設備：{'、'.join(assigned_records)} (時段 [{time_slot_str}]{prev_label})"
             )
         else:
             log_msg = (
