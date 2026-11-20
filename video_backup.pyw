@@ -2782,7 +2782,7 @@ class ArchiveTaskTab(ttk.Frame):
         ttk.Label(f_dash_status, text="行車紀錄器狀態：", width=14).pack(side="left")
         self.lbl_status_dashcam = ttk.Label(f_dash_status, text="⚪ 未檢測", foreground="#888888", font=('Helvetica', 9))
         self.lbl_status_dashcam.pack(side="left", padx=2)
-        ttk.Label(f_dash_status, text="↳ (專用 USB 讀卡機，常時連線複製不換插)", foreground="#666666", font=('Helvetica', 9)).pack(side="left", padx=6)
+        ttk.Label(f_dash_status, text="↳ (USB 讀卡機；3人出勤時與密錄器看哪台先好就拔哪台交換)", foreground="#666666", font=('Helvetica', 9)).pack(side="left", padx=6)
 
         # 列 1: 密錄器 1 同仁
         f_name1 = ttk.Frame(frame_step2)
@@ -2821,7 +2821,7 @@ class ArchiveTaskTab(ttk.Frame):
         self.lbl_status_name3.pack(side="left", padx=6)
 
         ttk.Button(f_name3, text="🧹 清空", command=lambda: self.entry_name3.set(""), width=6).pack(side="left", padx=4)
-        ttk.Label(f_name3, text="↳ (3人出勤時填寫；電腦3孔將於密錄器1、2完成後引導換插)", foreground="#007ACC", font=('Helvetica', 9)).pack(side="left", padx=2)
+        ttk.Label(f_name3, text="↳ (3人出勤時填寫；電腦3孔，任一設備完成後自動提示換插)", foreground="#007ACC", font=('Helvetica', 9)).pack(side="left", padx=2)
 
         # 列 4: 姓名快速對調區 (含 1⇄2、2⇄3、1⇄3 及 1➔2➔3 順序輪替)
         f_swap_line = ttk.Frame(frame_step2)
@@ -4032,74 +4032,56 @@ class ArchiveTaskTab(ttk.Frame):
         req_b2 = bool(name2 or bodycam2_src)
         req_b3 = bool(name3)  # 密錄器 3 僅在使用者有輸入人名時才視為需執行之任務
 
-        precheck_results = []
-
-        # 1. 行車紀錄器 (獨立 USB 讀卡機，常態直接複製不換插)
+        needed_devices = []
         if req_dash:
-            files = self.find_videos_in_range(dashcam_src, start_dt, end_dt) if dash_conn else []
-            precheck_results.append({
-                "type": "dashcam",
-                "label": "🚗 行車紀錄器",
-                "src": dashcam_src,
-                "connected": dash_conn,
-                "is_swap_phase2": False,
-                "files": files,
-                "name": "",
-                "status_desc": f"{'🟢 已連線' if dash_conn else '🔴 ' + dash_msg}"
-            })
-
-        # 2. 密錄器 1
+            needed_devices.append(("dashcam", "🚗 行車紀錄器", dashcam_src, dash_conn, dash_msg, ""))
         if req_b1:
-            files = self.find_videos_in_range(bodycam1_src, start_dt, end_dt) if b1_conn else []
-            precheck_results.append({
-                "type": "bodycam1",
-                "label": f"📹 密錄器 1 ({name1 if name1 else '未填姓名'})",
-                "src": bodycam1_src,
-                "connected": b1_conn,
-                "is_swap_phase2": False,
-                "files": files,
-                "name": name1,
-                "status_desc": f"{'🟢 已連線' if b1_conn else '🔴 ' + b1_msg}"
-            })
-
-        # 3. 密錄器 2
+            needed_devices.append(("bodycam1", f"📹 密錄器 1 ({name1 if name1 else '未填姓名'})", bodycam1_src, b1_conn, b1_msg, name1))
         if req_b2:
-            files = self.find_videos_in_range(bodycam2_src, start_dt, end_dt) if b2_conn else []
-            precheck_results.append({
-                "type": "bodycam2",
-                "label": f"📹 密錄器 2 ({name2 if name2 else '未填姓名'})",
-                "src": bodycam2_src,
-                "connected": b2_conn,
-                "is_swap_phase2": False,
-                "files": files,
-                "name": name2,
-                "status_desc": f"{'🟢 已連線' if b2_conn else '🔴 ' + b2_msg}"
-            })
-
-        # 4. 密錄器 3 (適配電腦 3 孔限制：若未連線則排入第 2 階段換插)
+            needed_devices.append(("bodycam2", f"📹 密錄器 2 ({name2 if name2 else '未填姓名'})", bodycam2_src, b2_conn, b2_msg, name2))
         if req_b3:
-            if b3_conn:
-                files = self.find_videos_in_range(bodycam3_src, start_dt, end_dt)
+            needed_devices.append(("bodycam3", f"📹 密錄器 3 ({name3})", bodycam3_src, b3_conn, b3_msg, name3))
+
+        # 計算已連線設備數量
+        connected_count = sum(1 for dev in needed_devices if dev[3])
+        total_needed = len(needed_devices)
+
+        # 若需要複製 4 台設備，但電腦僅 3 孔：
+        # 自動找出未連線的設備排入「待換插設備 (Phase 2)」
+        # （同仁可能先插 3 台密錄器，或先插行車+2台密錄器，只要未插的那台就排入待換插）
+        swap_dev_type = None
+        if total_needed > 3 and connected_count <= 3:
+            for dev in needed_devices:
+                if not dev[3]:  # 未連線
+                    swap_dev_type = dev[0]
+                    break
+            if not swap_dev_type:
+                swap_dev_type = "bodycam3"
+
+        precheck_results = []
+        for dev_type, dev_label, dev_src, is_conn, conn_msg, off_name in needed_devices:
+            if dev_type == swap_dev_type and (not is_conn or total_needed > 3):
                 precheck_results.append({
-                    "type": "bodycam3",
-                    "label": f"📹 密錄器 3 ({name3})",
-                    "src": bodycam3_src,
-                    "connected": True,
-                    "is_swap_phase2": False,
-                    "files": files,
-                    "name": name3,
-                    "status_desc": "🟢 已連線"
-                })
-            else:
-                precheck_results.append({
-                    "type": "bodycam3",
-                    "label": f"📹 密錄器 3 ({name3})",
-                    "src": "",
+                    "type": dev_type,
+                    "label": dev_label,
+                    "src": dev_src,
                     "connected": True,
                     "is_swap_phase2": True,
                     "files": [],
-                    "name": name3,
-                    "status_desc": "⏳ 待換插 (電腦 3 孔限制) — 待密錄器 1、2 完成後提示插上"
+                    "name": off_name,
+                    "status_desc": "⏳ 待換插 (電腦 3 孔限制) — 任一設備完成後自動提示插上"
+                })
+            else:
+                files = self.find_videos_in_range(dev_src, start_dt, end_dt) if is_conn else []
+                precheck_results.append({
+                    "type": dev_type,
+                    "label": dev_label,
+                    "src": dev_src,
+                    "connected": is_conn,
+                    "is_swap_phase2": False,
+                    "files": files,
+                    "name": off_name,
+                    "status_desc": f"{'🟢 已連線' if is_conn else '🔴 ' + conn_msg}"
                 })
 
         # 彈出預檢確認視窗
@@ -4250,46 +4232,46 @@ class ArchiveTaskTab(ttk.Frame):
         dlg.wait_window()
         return user_choice[0]
 
-    def prompt_card_swap(self, reader_path, target_dev_type, target_name, target_label, start_dt, end_dt):
+    def prompt_card_swap(self, reader_path, target_dev_type, target_name, target_label, start_dt, end_dt, completed_dev_names=""):
         """【電腦 3 孔換插獨立引導對話框】(在背景線程中呼叫，透過 Event 與主線程 UI 同步)
-        行車紀錄器插於專用讀卡機常態獨立運作，不受此換插流程影響！
-        密錄器 1、2 完成後釋出傳輸孔，同仁僅需拔除密錄器 1 或 2，插上第 3 台密錄器即可。
+        任一設備（行車紀錄器或密錄器）複製完成後即可拔除該設備，插上待換插設備。
         支援智慧自動掃描，換插後自動識別新隨身碟與時段影片，無須對齊硬碟代碼與標籤。
         """
         swap_event = threading.Event()
         swap_confirmed = [False]
         scanned_files = []
 
-        dev_title = f"密錄器 3 ({target_name})" if (target_dev_type == "bodycam3" and target_name) else ("密錄器 3" if target_dev_type == "bodycam3" else "行車紀錄器")
+        dev_title = f"密錄器 3 ({target_name})" if (target_dev_type == "bodycam3" and target_name) else ("密錄器 3" if target_dev_type == "bodycam3" else ("行車紀錄器" if target_dev_type == "dashcam" else target_name or "待換插設備"))
+        done_text = completed_dev_names if completed_dev_names else "已有設備"
 
         def show_dialog():
             dlg = tk.Toplevel(self.app.root)
             dlg.title(f"🔔 請插上【{dev_title}】 (電腦 3 孔換插指引)")
-            dlg.geometry("580x420")
+            dlg.geometry("590x420")
             dlg.resizable(False, False)
             dlg.transient(self.app.root)
             dlg.grab_set()
 
             dlg.update_idletasks()
-            x = self.app.root.winfo_x() + (self.app.root.winfo_width() - 580) // 2
+            x = self.app.root.winfo_x() + (self.app.root.winfo_width() - 590) // 2
             y = self.app.root.winfo_y() + (self.app.root.winfo_height() - 420) // 2
             dlg.geometry(f"+{max(0, x)}+{max(0, y)}")
 
             f = ttk.Frame(dlg, padding=16)
             f.pack(fill="both", expand=True)
 
-            ttk.Label(f, text="🎉 密錄器 1 與 2 已複製完成！", font=('Helvetica', 12, 'bold'), foreground="#008800").pack(anchor="w", pady=(0, 4))
-            ttk.Label(f, text="💡 電腦硬體限制：本機僅有 3 個 USB 孔，現在請換插第 3 台密錄器", foreground="#0066CC", font=('Helvetica', 10, 'bold')).pack(anchor="w", pady=(0, 6))
+            ttk.Label(f, text=f"🎉 {done_text} 已複製完成！", font=('Helvetica', 12, 'bold'), foreground="#008800").pack(anchor="w", pady=(0, 4))
+            ttk.Label(f, text="💡 電腦僅 3 個 USB 插槽：已釋出插槽，現在看哪台先好就拔哪台換插！", foreground="#0066CC", font=('Helvetica', 10, 'bold')).pack(anchor="w", pady=(0, 6))
 
             ttk.Separator(f, orient="horizontal").pack(fill="x", pady=4)
 
             msg = (
                 f"【簡易操作指引】：\n\n"
-                f"1. 🚗 行車紀錄器專用讀卡機常態插著，請勿拔除（行車影像獨立處理或已完成）。\n"
-                f"2. 📹 請從電腦 USB 孔拔下任一條已完成之【密錄器 1 或 2】傳輸線。\n"
-                f"3. 🔌 將【{dev_title}】傳輸線插入剛釋出的 USB 孔。\n"
-                f"4. ⚡ 插妥後稍候 2~3 秒，點擊下方【⚡ 我已插妥，自動偵測並繼續】按鈕。\n\n"
-                f"系統將全自動智慧掃描新插入之隨身碟與時段影像，無須對齊硬碟代碼或選取路徑！"
+                f"1. 🔌 請從電腦 USB 孔拔下任一台【已複製完成之設備】（如：{done_text}，讀卡機或線路皆可拔）。\n"
+                f"2. 📹 將【{dev_title}】傳輸線或讀卡機插入剛釋出的 USB 孔。\n"
+                f"3. ⚡ 插妥後稍候 2~3 秒，點擊下方【⚡ 我已插妥，自動偵測並繼續】按鈕。\n\n"
+                f"系統將全自動智慧掃描新插入之隨身碟與時段影像，無須對齊硬碟代碼或選取路徑！\n"
+                f"（其他尚未完成的設備仍在背景繼續複製，完全不受影響）"
             )
             ttk.Label(f, text=msg, justify="left", font=('Helvetica', 10)).pack(anchor="w", pady=4)
 
@@ -4409,21 +4391,19 @@ class ArchiveTaskTab(ttk.Frame):
                     self.log(f"📁 [空資料夾建立] 已為【{item['label']}】建立規範資料夾：{os.path.basename(target_folder)} (原因: {reason})")
 
             # 2. 規劃複製任務與多線程拷貝
-            item_dash = next((x for x in precheck_results if x["type"] == "dashcam"), None)
-            item_b1 = next((x for x in precheck_results if x["type"] == "bodycam1"), None)
-            item_b2 = next((x for x in precheck_results if x["type"] == "bodycam2"), None)
-            item_b3 = next((x for x in precheck_results if x["type"] == "bodycam3"), None)
-
             init_total = sum(len(x["files"]) for x in precheck_results if x.get("connected") and not x.get("is_swap_phase2"))
             total_files_counter = [init_total]
             copied_files_counter = [0]
             progress_lock = threading.Lock()
+            completed_lock = threading.Lock()
+            completed_devices = []
+            first_completed_event = threading.Event()
 
             self.update_progress_bar(maximum=max(1, total_files_counter[0]), value=0)
             self.update_status(f"狀態：正在複製 (0/{total_files_counter[0]}) 部影片...", "#0066CC")
             self.log(f"🚀 開始多線程獨立複製程序，預計寫入 {total_files_counter[0]} 個影片...")
 
-            def copy_files_worker(src_files, dst_dir, dev_type):
+            def copy_files_worker(src_files, dst_dir, dev_type, dev_label):
                 os.makedirs(dst_dir, exist_ok=True)
                 if dst_dir not in self.active_created_folders:
                     self.active_created_folders.append(dst_dir)
@@ -4450,136 +4430,133 @@ class ArchiveTaskTab(ttk.Frame):
                             self.log(f"⏳ [{c}/{t}] 複製完成: {fn} ({dt})")
                         self.safe_root_after(0, update_progress)
 
+                # 該設備檔案已全數複製完成
+                with completed_lock:
+                    if dev_label not in completed_devices:
+                        completed_devices.append(dev_label)
+                    first_completed_event.set()
+                self.log(f"🎉【{dev_label}】複製完成！已釋出 USB 插槽。")
+
             worker_threads = []
-            t1 = None
-            t2 = None
-            td = None
+            phase1_threads = []
 
-            # Thread 1: 密錄器 1 (獨立背景線程)
-            if item_b1 and item_b1.get("connected") and item_b1.get("files"):
-                name = item_b1.get("name", "")
-                folder_name = f"{case_no}{name}" if name else f"{case_no}"
-                b1_dst = os.path.join(bodycam_target, today_mmdd, case_no, folder_name)
-                case_root = os.path.join(bodycam_target, today_mmdd, case_no)
-                if case_root not in opened_folders:
-                    opened_folders.append(case_root)
+            # 找出需要執行的第一階段已連線設備，與待換插設備 (Phase 2)
+            phase1_items = [x for x in precheck_results if x.get("connected") and not x.get("is_swap_phase2") and x.get("files")]
+            pending_swap_item = next((x for x in precheck_results if x.get("is_swap_phase2")), None)
 
-                t1 = threading.Thread(target=copy_files_worker, args=(item_b1["files"], b1_dst, "bodycam1"))
-                t1.daemon = True
-                worker_threads.append(t1)
-
-            # Thread 2: 密錄器 2 (獨立背景線程)
-            if item_b2 and item_b2.get("connected") and item_b2.get("files"):
-                name = item_b2.get("name", "")
-                folder_name = f"{case_no}{name}" if name else f"{case_no}"
-                b2_dst = os.path.join(bodycam_target, today_mmdd, case_no, folder_name)
-                case_root = os.path.join(bodycam_target, today_mmdd, case_no)
-                if case_root not in opened_folders:
-                    opened_folders.append(case_root)
-
-                t2 = threading.Thread(target=copy_files_worker, args=(item_b2["files"], b2_dst, "bodycam2"))
-                t2.daemon = True
-                worker_threads.append(t2)
-
-            # Thread D: 行車紀錄器 (專用 USB 讀卡機，常時連線獨立背景線程複製，完全不參與換插)
-            if item_dash and item_dash.get("connected") and item_dash.get("files"):
-                d_dst = os.path.join(dashcam_target, today_mmdd, case_no)
-                td = threading.Thread(target=copy_files_worker, args=(item_dash["files"], d_dst, "dashcam"))
-                td.daemon = True
-                worker_threads.append(td)
-
-            # Thread 3: 密錄器 3
-            if item_b3:
-                if item_b3.get("is_swap_phase2"):
-                    # 電腦 3 孔限制：等待密錄器 1、2 複製完成後提示拔除換插密錄器 3
-                    def bodycam3_swap_flow():
-                        active_b_threads = [t for t in (t1, t2) if t is not None]
-                        if active_b_threads:
-                            self.log("⏳ [密錄器 3 佇列] 電腦 3 孔限制：等待密錄器 1、2 複製完成以釋出 USB 插槽...")
-                            for t in active_b_threads:
-                                t.join()
-
-                        if self.stop_requested.is_set():
-                            return
-
-                        self.log("⚡ 密錄器 1 與 2 已複製完成！USB 插槽已釋出。")
-                        self.log("📢 提示換插：行車紀錄器持續運作中（讀卡機免拔），請將密錄器 1 或 2 拔下換插密錄器 3！")
-
-                        p3_name = item_b3.get("name", "")
-                        p3_label = self.app.config.get("label_bodycam3", "BODYCAM3")
-
-                        confirmed, new_files = self.prompt_card_swap(
-                            reader_path="",
-                            target_dev_type="bodycam3",
-                            target_name=p3_name,
-                            target_label=p3_label,
-                            start_dt=start_dt,
-                            end_dt=end_dt
-                        )
-
-                        if confirmed and not self.stop_requested.is_set():
-                            if new_files:
-                                with progress_lock:
-                                    total_files_counter[0] += len(new_files)
-                                    cur_t = total_files_counter[0]
-                                    self.update_progress_bar(maximum=cur_t)
-
-                                folder_name = f"{case_no}{p3_name}" if p3_name else f"{case_no}"
-                                p3_dst = os.path.join(bodycam_target, today_mmdd, case_no, folder_name)
-                                case_root = os.path.join(bodycam_target, today_mmdd, case_no)
-                                if case_root not in opened_folders:
-                                    opened_folders.append(case_root)
-
-                                self.log(f"⚡ [換插接續] 成功對接密錄器 3，開始複製【{item_b3['label']}】(共 {len(new_files)} 部影片)...")
-                                copy_files_worker(new_files, p3_dst, "bodycam3")
-                            else:
-                                self.log(f"🟡 [換插作業] 密錄器 3 在時段內無影片 (0 部)。")
-                                missing_reasons = self.app.config.get("missing_reasons", DEFAULT_MISSING_REASONS)
-                                reason = missing_reasons[0] if missing_reasons else "未錄影"
-                                empty_folder_reasons["bodycam3"] = reason
-
-                                folder_name = f"{case_no}{p3_name}({reason})" if p3_name else f"{case_no}({reason})"
-                                empty_dir = os.path.join(bodycam_target, today_mmdd, case_no, folder_name)
-
-                                os.makedirs(empty_dir, exist_ok=True)
-                                self.active_created_folders.append(empty_dir)
-                                opened_folders.append(empty_dir)
-
-                                readme_p = os.path.join(empty_dir, "說明.txt")
-                                try:
-                                    with open(readme_p, "w", encoding="utf-8") as rf:
-                                        st_name = getattr(self.app, 'config', {}).get("station_name", "消防分隊")
-                                        rf.write("========================================\n")
-                                        rf.write(f"{st_name} 救護影像歸檔備註說明\n")
-                                        rf.write("========================================\n")
-                                        rf.write(f"案件案號：{case_no}\n")
-                                        rf.write(f"設備名稱：{item_b3['label']}\n")
-                                        rf.write(f"執勤同仁：{p3_name if p3_name else '（無）'}\n")
-                                        rf.write(f"建檔時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                                        rf.write(f"未錄影原因：{reason}\n")
-                                        rf.write(f"說明備註：本梯次該設備因【{reason}】，於出勤時段內無影像錄製存檔，特此建立規範存查。\n")
-                                        rf.write("========================================\n")
-                                except:
-                                    pass
-                                self.log(f"📁 已為【{item_b3['label']}】自動建立規範備註空資料夾：{os.path.basename(empty_dir)}")
-                        else:
-                            self.log(f"⚠️ 使用者已略過【{item_b3['label']}】換插作業。")
-
-                    t_b3_swap = threading.Thread(target=bodycam3_swap_flow)
-                    t_b3_swap.daemon = True
-                    worker_threads.append(t_b3_swap)
-                elif item_b3.get("connected") and item_b3.get("files"):
-                    # 常態同時連線（如外接 HUB）
-                    name = item_b3.get("name", "")
+            # 為所有第一階段已連線設備啟動背景獨立線程平行複製
+            for p1 in phase1_items:
+                p1_type = p1["type"]
+                p1_label = p1["label"]
+                if p1_type == "dashcam":
+                    dst = os.path.join(dashcam_target, today_mmdd, case_no)
+                else:
+                    name = p1.get("name", "")
                     folder_name = f"{case_no}{name}" if name else f"{case_no}"
-                    b3_dst = os.path.join(bodycam_target, today_mmdd, case_no, folder_name)
+                    dst = os.path.join(bodycam_target, today_mmdd, case_no, folder_name)
                     case_root = os.path.join(bodycam_target, today_mmdd, case_no)
                     if case_root not in opened_folders:
                         opened_folders.append(case_root)
 
-                    tb3 = threading.Thread(target=copy_files_worker, args=(item_b3["files"], b3_dst, "bodycam3"))
-                    tb3.daemon = True
-                    worker_threads.append(tb3)
+                t = threading.Thread(target=copy_files_worker, args=(p1["files"], dst, p1_type, p1_label))
+                t.daemon = True
+                worker_threads.append(t)
+                phase1_threads.append(t)
+
+            # 若有待換插設備（電腦 3 孔限制）：啟動動態換插監控線程，看哪台先好就拔哪台換插！
+            if pending_swap_item:
+                def swap_watcher_flow():
+                    self.log(f"⏳ [{pending_swap_item['label']} 換插佇列] 電腦 3 孔限制：已連線之設備平行複製中，看哪台先好就拔哪台換插...")
+
+                    # 等待任一第一階段設備完成
+                    while not self.stop_requested.is_set():
+                        if first_completed_event.wait(timeout=0.5):
+                            break
+                        if phase1_threads and all(not th.is_alive() for th in phase1_threads):
+                            break
+                        if not phase1_threads:
+                            break
+
+                    if self.stop_requested.is_set():
+                        return
+
+                    with completed_lock:
+                        done_names = "、".join([f"【{x}】" for x in completed_devices]) if completed_devices else "已完成設備"
+
+                    self.log(f"⚡ {done_names} 已複製完成！已釋出 USB 插槽。")
+                    self.log(f"📢 提示換插：看哪台先好就拔哪台，請拔下已完成之設備，換插【{pending_swap_item['label']}】！")
+
+                    p_type = pending_swap_item["type"]
+                    p_name = pending_swap_item.get("name", "")
+                    p_label = self.app.config.get(f"label_{p_type}", "BODYCAM3" if p_type == "bodycam3" else "DASHCAM")
+
+                    confirmed, new_files = self.prompt_card_swap(
+                        reader_path="",
+                        target_dev_type=p_type,
+                        target_name=p_name,
+                        target_label=p_label,
+                        start_dt=start_dt,
+                        end_dt=end_dt,
+                        completed_dev_names=done_names
+                    )
+
+                    if confirmed and not self.stop_requested.is_set():
+                        if new_files:
+                            with progress_lock:
+                                total_files_counter[0] += len(new_files)
+                                cur_t = total_files_counter[0]
+                                self.update_progress_bar(maximum=cur_t)
+
+                            if p_type == "dashcam":
+                                p_dst = os.path.join(dashcam_target, today_mmdd, case_no)
+                            else:
+                                folder_name = f"{case_no}{p_name}" if p_name else f"{case_no}"
+                                p_dst = os.path.join(bodycam_target, today_mmdd, case_no, folder_name)
+                                case_root = os.path.join(bodycam_target, today_mmdd, case_no)
+                                if case_root not in opened_folders:
+                                    opened_folders.append(case_root)
+
+                            self.log(f"⚡ [換插接續] 成功對接【{pending_swap_item['label']}】，開始複製 (共 {len(new_files)} 部影片)...")
+                            copy_files_worker(new_files, p_dst, p_type, pending_swap_item['label'])
+                        else:
+                            self.log(f"🟡 [換插作業] 【{pending_swap_item['label']}】在時段內無影片 (0 部)。")
+                            missing_reasons = self.app.config.get("missing_reasons", DEFAULT_MISSING_REASONS)
+                            reason = missing_reasons[0] if missing_reasons else "未錄影"
+                            empty_folder_reasons[p_type] = reason
+
+                            if p_type == "dashcam":
+                                empty_dir = os.path.join(dashcam_target, today_mmdd, f"{case_no}({reason})")
+                            else:
+                                folder_name = f"{case_no}{p_name}({reason})" if p_name else f"{case_no}({reason})"
+                                empty_dir = os.path.join(bodycam_target, today_mmdd, case_no, folder_name)
+
+                            os.makedirs(empty_dir, exist_ok=True)
+                            self.active_created_folders.append(empty_dir)
+                            opened_folders.append(empty_dir)
+
+                            readme_p = os.path.join(empty_dir, "說明.txt")
+                            try:
+                                with open(readme_p, "w", encoding="utf-8") as rf:
+                                    st_name = getattr(self.app, 'config', {}).get("station_name", "消防分隊")
+                                    rf.write("========================================\n")
+                                    rf.write(f"{st_name} 救護影像歸檔備註說明\n")
+                                    rf.write("========================================\n")
+                                    rf.write(f"案件案號：{case_no}\n")
+                                    rf.write(f"設備名稱：{pending_swap_item['label']}\n")
+                                    rf.write(f"執勤同仁：{p_name if p_name else '（無）'}\n")
+                                    rf.write(f"建檔時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                                    rf.write(f"未錄影原因：{reason}\n")
+                                    rf.write(f"說明備註：本梯次該設備因【{reason}】，於出勤時段內無影像錄製存檔，特此建立規範存查。\n")
+                                    rf.write("========================================\n")
+                            except:
+                                pass
+                            self.log(f"📁 已為【{pending_swap_item['label']}】自動建立規範備註空資料夾：{os.path.basename(empty_dir)}")
+                    else:
+                        self.log(f"⚠️ 使用者已略過【{pending_swap_item['label']}】換插作業。")
+
+                t_swap = threading.Thread(target=swap_watcher_flow)
+                t_swap.daemon = True
+                worker_threads.append(t_swap)
 
             for t in worker_threads:
                 t.start()
