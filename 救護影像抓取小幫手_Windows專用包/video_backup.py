@@ -60,10 +60,11 @@ DEFAULT_MISSING_REASONS = [
     "鏡頭髒污無效"
 ]
 
-# 智慧設備指紋演算法官方預設規則（使用者可於快速設定自訂調整）
-DEFAULT_DASHCAM_KEYWORDS = "CARDV, NORMAL, EVENT, PARK, MOVIE, TS, EMR, FRONT, REAR, CAR_DVR"
+# 智慧設備指紋演算法官方預設規則（使用者可於快速設定自訂調整，系統將 100% 嚴格遵循此設定）
+DEFAULT_DASHCAM_KEYWORDS = "CAREC, CARDV, NORMAL, EVENT, PARK, MOVIE, TS, EMR, FRONT, REAR, CAR_DVR"
 DEFAULT_DASHCAM_FN_PATTERNS = "_F., _R., NORMAL_, EVENT_"
-DEFAULT_BODYCAM_KEYWORDS = "DCIM, 100MEDIA, 100DSCIM, RECORD, VIDEO, AUDIO, PHOTO, BODYCAM, POLICE, AEE, TRANSCEND"
+DEFAULT_BODYCAM_KEYWORDS = "DPB30, DPB10, DPB60, DPB70, DCIM, 100MEDIA, 100DSCIM, RECORD, VIDEO, AUDIO, PHOTO, BODYCAM, POLICE, AEE, 密錄器"
+DEFAULT_EXCLUDED_DISK_KEYWORDS = "TRANSCEND, TRANSCENDELITE, RECOVERRX"
 DEFAULT_TIME_BUFFER_MINUTES = 15
 
 def get_duty_date(date_str, start_hour):
@@ -634,37 +635,46 @@ def get_dialog_initialdir(raw_path, fallback_dir=""):
 
 def scan_all_ems_devices(start_dt=None, end_dt=None, config=None, quick_mode=False, exclude_paths=None):
     """
-    【一鍵全裝置智慧掃描與特徵指紋辨識（單一真相來源）】
-    自動突破 Windows 磁碟槽代碼隨插動態亂跳、無標籤、冷門資料夾命名或原廠名稱問題。
+    【一鍵全裝置智慧掃描與特徵指紋辨識（單一真相來源 ＆ 100% 嚴格遵循使用者特徵設定）】
     核心設計原則：
-    1. Windows 下所有已就緒之抽取式磁碟 (DRIVE_REMOVABLE，排除空讀卡機槽) 一律 100% 納入辨識，絕不漏抓！
-    2. 固定磁碟 (DRIVE_FIXED)：自動排除系統槽 C:\、存放目標目錄所在硬碟、以及含 Windows/Users 系統目錄之硬碟；
-       其餘外接 USB SSD / 內建 eMMC 密錄器，只要具攝影機標籤或頂層攝影機特徵目錄即納入。
-    3. 精準區分行車紀錄器與密錄器：
-       - 行車紀錄器必須具備「明確強特徵」（DASHCAM 標籤、CARDV/CAR_DVR/PARK/FRONT/REAR/GPS 目錄、.ts 或 _F./_R. 檔名，
-         或同時具備多組行車分區目錄且無密錄器特徵），防止把含 MOVIE/EMR/NORMAL 的密錄器誤搶成行車紀錄器！
-       - 其餘外接隨身碟（含創見 DrivePro Body、警用密錄器、空白卡、任意命名資料夾）一律歸類為密錄器，並按磁碟代號穩定排序！
+    1. 絕不偷塞硬編碼關鍵字：100% 嚴格依照使用者在【系統設定】所設定之「標籤」、「目錄/特徵關鍵字」
+       與「排除常態硬碟清單」進行辨識！使用者刪掉某個特徵字（例如 TRANSCEND）就會立刻生效！
+    2. 無條件排除本機系統槽 C:\、含 Windows/Users 之系統硬碟、存放目標目錄所在硬碟（不論固定或外接），
+       以及命中「常態排除硬碟清單」（如 Transcend1號 / TranscendElite / RecoverRx）之備份硬碟！
+    3. 未符合任何使用者設定之行車紀錄器或密錄器特徵之磁碟，絕不硬抓進密錄器清單，並將原因記錄於 diagnostics。
     """
-    # 整理需排除之本機固定磁碟代號（例如系統槽 C:、備份存放硬碟 D: 等）
+    # 1. 整理需排除之磁碟代號
+    # (a) 系統槽與程式本身所在槽（僅排除固定磁碟 DRIVE_FIXED）
     excluded_fixed_letters = {"C"}
+    # (b) 存放目標目錄 / 勤務表目錄所在磁碟（無論 FIXED 或 REMOVABLE，絕不當作攝影機來源！）
+    excluded_target_letters = set()
+
     if sys.platform == "win32":
-        check_paths = [os.getcwd()]
-        try:
-            check_paths.append(os.path.abspath(__file__))
-        except Exception:
-            pass
+        for p in (os.getcwd(), os.path.abspath(__file__) if '__file__' in globals() else ""):
+            if p:
+                try:
+                    drv = os.path.splitdrive(os.path.abspath(str(p)))[0]
+                    if drv and len(drv) >= 1:
+                        excluded_fixed_letters.add(drv[0].upper())
+                except Exception:
+                    pass
+
+        target_check_paths = []
         if config:
             for k in ("dashcam_target", "bodycam_target", "roster_path", "update_dir"):
                 v = config.get(k, "")
                 if v:
-                    check_paths.append(v)
+                    target_check_paths.append(v)
         if exclude_paths:
-            check_paths.extend([p for p in exclude_paths if p])
-        for p in check_paths:
+            target_check_paths.extend([p for p in exclude_paths if p])
+
+        for p in target_check_paths:
             try:
                 drv = os.path.splitdrive(os.path.abspath(str(p)))[0]
                 if drv and len(drv) >= 1:
-                    excluded_fixed_letters.add(drv[0].upper())
+                    ltr = drv[0].upper()
+                    excluded_target_letters.add(ltr)
+                    excluded_fixed_letters.add(ltr)
             except Exception:
                 pass
 
@@ -689,9 +699,11 @@ def scan_all_ems_devices(start_dt=None, end_dt=None, config=None, quick_mode=Fal
                     except Exception:
                         drv_type = 0
 
-                    # 2 = DRIVE_REMOVABLE (USB 隨身碟/記憶卡/密錄器), 3 = DRIVE_FIXED (本機硬碟或外接 USB 固態密錄器)
-                    if drv_type == 3 and letter in excluded_fixed_letters:
-                        diagnostics.append(f"{drive_path} (本機固定硬碟/目標槽，自動排除)")
+                    # 存放目錄/勤務表所在磁碟（無論固定或外接）一律無條件排除，絕不會自己讀自己
+                    if letter in excluded_target_letters and letter != "C":
+                        diagnostics.append(f"{drive_path} (存放目標/勤務表所在硬碟，自動排除)")
+                    elif drv_type == 3 and letter in excluded_fixed_letters:
+                        diagnostics.append(f"{drive_path} (本機系統/程式磁碟，自動排除)")
                     elif drv_type in (2, 3):
                         vol_name = ""
                         try:
@@ -728,9 +740,17 @@ def scan_all_ems_devices(start_dt=None, end_dt=None, config=None, quick_mode=Fal
                     if os.path.isdir(p):
                         disks.append((p, item, 2))
 
-    raw_dash_kw = (config.get("dashcam_keywords") if config else None) or DEFAULT_DASHCAM_KEYWORDS
-    raw_dash_fn = (config.get("dashcam_fn_patterns") if config else None) or DEFAULT_DASHCAM_FN_PATTERNS
-    raw_body_kw = (config.get("bodycam_keywords") if config else None) or DEFAULT_BODYCAM_KEYWORDS
+    # 2. 100% 嚴格讀取使用者設定的關鍵字與標籤（絕不偷塞已刪除的硬編碼字詞！）
+    raw_dash_kw = config.get("dashcam_keywords") if (config and "dashcam_keywords" in config) else DEFAULT_DASHCAM_KEYWORDS
+    raw_dash_fn = config.get("dashcam_fn_patterns") if (config and "dashcam_fn_patterns" in config) else DEFAULT_DASHCAM_FN_PATTERNS
+    raw_body_kw = config.get("bodycam_keywords") if (config and "bodycam_keywords" in config) else DEFAULT_BODYCAM_KEYWORDS
+    raw_excl_kw = config.get("excluded_disk_keywords") if (config and "excluded_disk_keywords" in config) else DEFAULT_EXCLUDED_DISK_KEYWORDS
+
+    raw_dash_kw = raw_dash_kw if raw_dash_kw is not None else ""
+    raw_dash_fn = raw_dash_fn if raw_dash_fn is not None else ""
+    raw_body_kw = raw_body_kw if raw_body_kw is not None else ""
+    raw_excl_kw = raw_excl_kw if raw_excl_kw is not None else ""
+
     try:
         buf_mins = int((config.get("time_buffer_minutes") if config else None) or DEFAULT_TIME_BUFFER_MINUTES)
     except Exception:
@@ -739,19 +759,23 @@ def scan_all_ems_devices(start_dt=None, end_dt=None, config=None, quick_mode=Fal
     buf_start = (start_dt - timedelta(minutes=buf_mins)) if start_dt else None
     buf_end = ((end_dt or (start_dt + timedelta(hours=3))) + timedelta(minutes=buf_mins)) if start_dt else None
 
-    cfg_dash = (config.get("label_dashcam", "DASHCAM") if config else "DASHCAM").strip().upper()
-    cfg_b1 = (config.get("label_bodycam1", "BODYCAM1") if config else "BODYCAM1").strip().upper()
-    cfg_b2 = (config.get("label_bodycam2", "BODYCAM2") if config else "BODYCAM2").strip().upper()
-    cfg_b3 = (config.get("label_bodycam3", "BODYCAM3") if config else "BODYCAM3").strip().upper()
+    def _split_tokens(raw_str):
+        return [k.strip().upper() for k in re.split(r'[,，、;；|\s]+', str(raw_str or "")) if k.strip()]
 
-    DASH_KEYWORDS = {k.strip().upper() for k in re.split(r'[,;|\s]+', raw_dash_kw) if k.strip()}
-    DASH_FN_PATTERNS = [p.strip().upper() for p in re.split(r'[,;|\s]+', raw_dash_fn) if p.strip()]
-    BODY_KEYWORDS = {k.strip().upper() for k in re.split(r'[,;|\s]+', raw_body_kw) if k.strip()}
+    cfg_dash_labels = _split_tokens(config.get("label_dashcam", "DASHCAM") if config else "DASHCAM")
+    cfg_body_labels = []
+    for k_lbl, def_lbl in (("label_bodycam1", "BODYCAM1"), ("label_bodycam2", "BODYCAM2"), ("label_bodycam3", "BODYCAM3")):
+        cfg_body_labels.extend(_split_tokens(config.get(k_lbl, def_lbl) if config else def_lbl))
 
-    # 專屬行車紀錄器強目錄特徵（排除與密錄器共用的 MOVIE/NORMAL/EVENT/EMR）
+    DASH_KEYWORDS = set(_split_tokens(raw_dash_kw))
+    DASH_FN_PATTERNS = _split_tokens(raw_dash_fn)
+    BODY_KEYWORDS = set(_split_tokens(raw_body_kw))
+    EXCLUDED_KEYWORDS = _split_tokens(raw_excl_kw)
+
+    # 共用弱目錄字（避免新密錄器裡單獨一個 EVENT/MOVIE 被誤搶成行車紀錄器）
     AMBIGUOUS_DIRS = {"MOVIE", "NORMAL", "EVENT", "EMR", "TS"}
-    STRONG_DASH_DIRS = (DASH_KEYWORDS - AMBIGUOUS_DIRS) | {"CARDV", "CAR_DVR", "PARK", "FRONT", "REAR", "GPS", "RO"}
-    STRONG_BODY_DIRS = BODY_KEYWORDS | {"DCIM", "100MEDIA", "100DSCIM", "100VIDEO", "RECORD", "VIDEO", "VIDEOS", "AUDIO", "PHOTO", "POLICE", "BODYCAM"}
+    STRONG_DASH_DIRS = DASH_KEYWORDS - AMBIGUOUS_DIRS
+    WEAK_DASH_DIRS = DASH_KEYWORDS & AMBIGUOUS_DIRS
     OS_SYSTEM_DIRS = {"WINDOWS", "PROGRAM FILES", "PROGRAM FILES (X86)", "USERS", "PROGRAMDATA", "RECOVERY", "PERFLOGS"}
 
     dashcam_candidates = []
@@ -773,19 +797,25 @@ def scan_all_ems_devices(start_dt=None, end_dt=None, config=None, quick_mode=Fal
             # 空讀卡機槽（無記憶卡插入）或無讀取權限，安全略過
             continue
 
-        # 固定磁碟 (DRIVE_FIXED) 保護：含 Windows 系統資料夾者絕非外接攝影機
-        if drv_type == 3 and (top_dirs & OS_SYSTEM_DIRS):
+        # 系統硬碟保護
+        if top_dirs & OS_SYSTEM_DIRS:
             diagnostics.append(f"{drive_path} [{vol_name or '無標籤'}] (含系統資料夾，自動排除)")
             continue
 
-        # 收集頂層與第 2 層目錄名稱（極快）
+        # 常態外接備份硬碟黑名單排除（比對磁碟名稱與頂層資料夾，優先於一切特徵！）
+        hit_excl = None
+        for ex_kw in EXCLUDED_KEYWORDS:
+            if (norm_label and ex_kw in norm_label) or any(ex_kw in d for d in top_dirs):
+                hit_excl = ex_kw
+                break
+        if hit_excl:
+            diagnostics.append(f"{drive_path} [{vol_name or '無標籤'}] (命中排除清單「{hit_excl}」，已略過)")
+            continue
+
+        # 收集頂層與深層目錄名稱及影片資訊
         all_dir_names = set(top_dirs)
-        if not quick_mode:
-            max_walk_depth = 3
-            max_video_scan = 400
-        else:
-            max_walk_depth = 2
-            max_video_scan = 30
+        max_walk_depth = 2 if quick_mode else 3
+        max_video_scan = 30 if quick_mode else 400
 
         matched_videos = []
         all_videos_count = 0
@@ -796,7 +826,6 @@ def scan_all_ems_devices(start_dt=None, end_dt=None, config=None, quick_mode=Fal
             drive_root_depth = drive_path.rstrip(os.sep).count(os.sep)
             for root, dirs, files in os.walk(drive_path):
                 cur_depth = root.count(os.sep) - drive_root_depth
-                # 跳過系統隱藏目錄以加速
                 dirs[:] = [d for d in dirs if not d.startswith(".") and d.upper() not in ("SYSTEM VOLUME INFORMATION", "$RECYCLE.BIN")]
                 if cur_depth > max_walk_depth:
                     dirs.clear()
@@ -834,53 +863,55 @@ def scan_all_ems_devices(start_dt=None, end_dt=None, config=None, quick_mode=Fal
         except Exception:
             pass
 
-        # 檢查標籤與目錄特徵
-        is_dash_label = bool(norm_label and (
-            (cfg_dash and (cfg_dash == norm_label or cfg_dash in norm_label)) or
-            any(k in norm_label for k in ("DASHCAM", "CARDV", "CAR_DVR", "AMBA"))
-        ))
-        is_body_label = bool(norm_label and (
-            any(lbl and (lbl == norm_label or lbl in norm_label) for lbl in (cfg_b1, cfg_b2, cfg_b3)) or
-            any(k in norm_label for k in ("BODYCAM", "BODY", "TRANSCEND", "DRIVEPRO", "POLICE", "AEE", "SJCAM", "密錄"))
-        ))
-
-        has_strong_dash_dirs = bool(all_dir_names & STRONG_DASH_DIRS)
-        ambiguous_hits = all_dir_names & AMBIGUOUS_DIRS
-        has_strong_body_dirs = bool(all_dir_names & STRONG_BODY_DIRS)
-
-        # 若是固定磁碟 (DRIVE_FIXED)，必須明確具備攝影機標籤或頂層攝影機特徵目錄，避免誤抓一般本機資料硬碟
-        if drv_type == 3:
-            has_top_cam_dir = bool(top_dirs & (STRONG_DASH_DIRS | STRONG_BODY_DIRS | AMBIGUOUS_DIRS))
-            if not (is_dash_label or is_body_label or has_top_cam_dir):
-                diagnostics.append(f"{drive_path} [{vol_name or '無標籤'}] (固定硬碟且無攝影機特徵，自動排除)")
-                continue
-
-        # 精準評分：行車紀錄器 vs 密錄器
+        # 3. 100% 依使用者設定之標籤與目錄特徵計分
         score_dash = 0
         score_body = 0
 
-        # 行車紀錄器加權（只看強特徵，防止誤搶密錄器）
-        if is_dash_label:
+        # (a) 磁碟名稱 (Volume Label) 比對
+        dash_label_hit = bool(norm_label and any(lbl in norm_label for lbl in cfg_dash_labels))
+        dash_kw_label_hit = bool(norm_label and any(kw in norm_label for kw in DASH_KEYWORDS))
+        body_label_hit = bool(norm_label and any(lbl in norm_label for lbl in cfg_body_labels))
+        body_kw_label_hit = bool(norm_label and any(kw in norm_label for kw in BODY_KEYWORDS))
+
+        if dash_label_hit:
+            score_dash += 60
+        elif dash_kw_label_hit:
             score_dash += 50
-        if has_strong_dash_dirs:
-            score_dash += 30
-        if has_ts_files:
+
+        if body_label_hit:
+            score_body += 60
+        elif body_kw_label_hit:
+            score_body += 50
+
+        # (b) 資料夾名稱特徵比對（嚴格以使用者設定的關鍵字為準！）
+        strong_dash_dir_hits = all_dir_names & STRONG_DASH_DIRS
+        weak_dash_dir_hits = all_dir_names & WEAK_DASH_DIRS
+        body_dir_hits = all_dir_names & BODY_KEYWORDS
+
+        if strong_dash_dir_hits:
+            score_dash += min(60, 30 * len(strong_dash_dir_hits))
+        if body_dir_hits:
+            score_body += min(60, 30 * len(body_dir_hits))
+
+        # (c) 行車紀錄器影片副檔名與檔名特徵比對
+        if has_ts_files and ("TS" in DASH_KEYWORDS):
             score_dash += 20
         if has_fr_suffix:
             score_dash += 25
-        if any("CARDV" in Path(p[0]).parts for p in matched_videos):
-            score_dash += 20
-        # 只有「完全無密錄器強特徵」且同時具備 2 種以上行車常見分區資料夾（例如 NORMAL + EVENT）才加分
-        if not is_body_label and not has_strong_body_dirs and len(ambiguous_hits) >= 2:
-            score_dash += 25
 
-        # 密錄器加權
-        if is_body_label:
-            score_body += 50
-        if has_strong_body_dirs:
-            score_body += 25
-        if all_videos_count > 0 and not has_strong_dash_dirs and not has_fr_suffix and not has_ts_files:
-            score_body += 10
+        # (d) 弱行車目錄字（如 MOVIE/NORMAL/EVENT/EMR）：
+        # 若無密錄器標籤且命中 >=2 個弱行車目錄，或完全無密錄器分數但有命中弱行車目錄，才給予行車分數
+        if weak_dash_dir_hits:
+            if not (body_label_hit or body_kw_label_hit) and len(weak_dash_dir_hits) >= 2:
+                score_dash += 25
+            elif score_body == 0 and len(weak_dash_dir_hits) >= 1:
+                score_dash += 15
+
+        # (e) 嚴格特徵過濾：完全未命中任何行車或密錄器特徵的磁碟，絕不硬抓進密錄器！
+        if score_dash == 0 and score_body == 0:
+            sample_dirs = ", ".join(sorted(list(top_dirs))[:5]) if top_dirs else "(無資料夾)"
+            diagnostics.append(f"{drive_path} [{vol_name or '無標籤'}] (未符合設定特徵，已略過；頂層目錄: {sample_dirs})")
+            continue
 
         cand_info = {
             'path': drive_path,
@@ -892,13 +923,13 @@ def scan_all_ems_devices(start_dt=None, end_dt=None, config=None, quick_mode=Fal
             'score_body': score_body,
         }
 
-        if score_dash > score_body and score_dash >= 20:
+        if score_dash > score_body:
             dashcam_candidates.append(cand_info)
         else:
             bodycam_candidates.append(cand_info)
 
     # 排序候選清單：
-    # 行車紀錄器：依行車得分最高者優先；若超過 1 台被判為行車，其餘改歸入密錄器避免設備憑空消失！
+    # 行車紀錄器：依行車得分最高者優先；若超過 1 台被判為行車，其餘改歸入密錄器避免設備消失
     dashcam_candidates.sort(key=lambda c: (c['score_dash'], len(c['matched_files']), c['path'].upper()), reverse=True)
     detected_dashcam = None
     if dashcam_candidates:
@@ -906,8 +937,7 @@ def scan_all_ems_devices(start_dt=None, end_dt=None, config=None, quick_mode=Fal
         if len(dashcam_candidates) > 1:
             bodycam_candidates.extend(dashcam_candidates[1:])
 
-    # 密錄器：依磁碟路徑字母順序穩定排序（例如 E:\ -> 第一台, F:\ -> 第二台, G:\ -> 第三台）
-    # 確保順序與 Windows「我的電腦」一致，每次刷新絕不跳動錯位！
+    # 密錄器：依磁碟路徑字母順序穩定排序（例如 I:\ -> 第一台, J:\ -> 第二台）
     bodycam_candidates.sort(key=lambda c: c['path'].upper())
 
     return {
@@ -3328,8 +3358,14 @@ class ArchiveTaskTab(ttk.Frame):
         if not device_path or not os.path.exists(device_path):
             return None
 
-        # 優先檢查常見密錄器影片目錄層級
+        # 優先檢查常見密錄器影片目錄層級（含創見 DrivePro Body DPB30/10/60/70）
         candidates = [
+            os.path.join(device_path, "DPB30", "VIDEO"),
+            os.path.join(device_path, "DPB30", "MOVIE"),
+            os.path.join(device_path, "DPB30", "NORMAL"),
+            os.path.join(device_path, "DPB60", "VIDEO"),
+            os.path.join(device_path, "DPB70", "VIDEO"),
+            os.path.join(device_path, "DPB10", "VIDEO"),
             os.path.join(device_path, "DCIM", "100MEDIA"),
             os.path.join(device_path, "DCIM", "100DSCIM"),
             os.path.join(device_path, "DCIM", "100VIDEO"),
@@ -3345,17 +3381,23 @@ class ArchiveTaskTab(ttk.Frame):
             if os.path.exists(c) and os.path.isdir(c):
                 return c
 
-        # 若上述常見結構不存在，快速在 2 層目錄內搜尋含有影片檔之資料夾
+        # 若上述常見結構不存在，快速在 3 層目錄內搜尋含有影片檔之資料夾
         try:
             for root, dirs, files in os.walk(device_path):
                 rel = os.path.relpath(root, device_path)
                 depth = len(rel.split(os.sep)) if rel != "." else 0
                 if any(Path(f).suffix.lower() in VIDEO_EXTENSIONS for f in files):
                     return root
-                if depth >= 2:
+                if depth >= 3:
                     dirs.clear()
         except Exception:
             pass
+
+        # 最後保底：若有 DPB30 等品牌目錄，直接開啟該目錄
+        for fallback_dir in ("DPB30", "DPB60", "DPB70", "DPB10"):
+            fp = os.path.join(device_path, fallback_dir)
+            if os.path.exists(fp) and os.path.isdir(fp):
+                return fp
 
         return device_path
 
@@ -3408,6 +3450,8 @@ class ArchiveTaskTab(ttk.Frame):
         if pre_scanned is not None:
             scan_res = pre_scanned
         else:
+            if hasattr(self.app, 'sync_fingerprint_settings_to_config'):
+                self.app.sync_fingerprint_settings_to_config()
             scan_res = scan_all_ems_devices(
                 config=self.app.config,
                 quick_mode=True,
@@ -3815,6 +3859,9 @@ class ArchiveTaskTab(ttk.Frame):
                             end_dt += timedelta(days=1)
         except Exception:
             pass
+
+        if hasattr(self.app, 'sync_fingerprint_settings_to_config'):
+            self.app.sync_fingerprint_settings_to_config()
 
         scan_res = scan_all_ems_devices(
             start_dt, end_dt,
@@ -5932,6 +5979,7 @@ class VideoBackupApp:
             "dashcam_keywords": DEFAULT_DASHCAM_KEYWORDS,
             "dashcam_fn_patterns": DEFAULT_DASHCAM_FN_PATTERNS,
             "bodycam_keywords": DEFAULT_BODYCAM_KEYWORDS,
+            "excluded_disk_keywords": DEFAULT_EXCLUDED_DISK_KEYWORDS,
             "time_buffer_minutes": DEFAULT_TIME_BUFFER_MINUTES,
             "roster_path": "",
             "update_dir": "",
@@ -5949,9 +5997,30 @@ class VideoBackupApp:
                 pass
         return default_cfg
 
+    def sync_fingerprint_settings_to_config(self):
+        """即時將【系統設定】分頁中已編輯的標籤、特徵指紋與排除清單同步至 self.config，確保即改即採納"""
+        if hasattr(self, 'entry_label_dashcam'):
+            self.config["label_dashcam"] = self.entry_label_dashcam.get().strip()
+            self.config["label_bodycam1"] = self.entry_label_b1.get().strip()
+            self.config["label_bodycam2"] = self.entry_label_b2.get().strip()
+            self.config["label_bodycam3"] = self.entry_label_b3.get().strip()
+        if hasattr(self, 'entry_dash_keywords'):
+            self.config["dashcam_keywords"] = self.entry_dash_keywords.get().strip()
+        if hasattr(self, 'entry_dash_fn_patterns'):
+            self.config["dashcam_fn_patterns"] = self.entry_dash_fn_patterns.get().strip()
+        if hasattr(self, 'entry_body_keywords'):
+            self.config["bodycam_keywords"] = self.entry_body_keywords.get().strip()
+        if hasattr(self, 'entry_excluded_disk_keywords'):
+            self.config["excluded_disk_keywords"] = self.entry_excluded_disk_keywords.get().strip()
+        if hasattr(self, 'entry_time_buffer_minutes'):
+            try:
+                self.config["time_buffer_minutes"] = int(self.entry_time_buffer_minutes.get().strip())
+            except Exception:
+                self.config["time_buffer_minutes"] = DEFAULT_TIME_BUFFER_MINUTES
+
     def save_config(self):
         try:
-            # 1. 從設定分頁抓取最新設定 (含車輛系統、勤務表路徑與設備硬碟標籤)
+            # 1. 從設定分頁抓取最新設定 (含車輛系統、勤務表路徑、設備硬碟標籤、特徵指紋與排除清單)
             if hasattr(self, 'cb_car_system_url'):
                 self.config["car_system_url"] = self.cb_car_system_url.get().strip() or DEFAULT_CAR_SYSTEM_URL
             if hasattr(self, 'cb_car_chrome_profile'):
@@ -5965,22 +6034,7 @@ class VideoBackupApp:
                 self.config["roster_path"] = self.entry_roster_path.get().strip()
             if hasattr(self, 'entry_update_dir'):
                 self.config["update_dir"] = self.entry_update_dir.get().strip()
-            if hasattr(self, 'entry_label_dashcam'):
-                self.config["label_dashcam"] = self.entry_label_dashcam.get().strip()
-                self.config["label_bodycam1"] = self.entry_label_b1.get().strip()
-                self.config["label_bodycam2"] = self.entry_label_b2.get().strip()
-                self.config["label_bodycam3"] = self.entry_label_b3.get().strip()
-            if hasattr(self, 'entry_dash_keywords'):
-                self.config["dashcam_keywords"] = self.entry_dash_keywords.get().strip() or DEFAULT_DASHCAM_KEYWORDS
-            if hasattr(self, 'entry_dash_fn_patterns'):
-                self.config["dashcam_fn_patterns"] = self.entry_dash_fn_patterns.get().strip() or DEFAULT_DASHCAM_FN_PATTERNS
-            if hasattr(self, 'entry_body_keywords'):
-                self.config["bodycam_keywords"] = self.entry_body_keywords.get().strip() or DEFAULT_BODYCAM_KEYWORDS
-            if hasattr(self, 'entry_time_buffer_minutes'):
-                try:
-                    self.config["time_buffer_minutes"] = int(self.entry_time_buffer_minutes.get().strip())
-                except Exception:
-                    self.config["time_buffer_minutes"] = DEFAULT_TIME_BUFFER_MINUTES
+            self.sync_fingerprint_settings_to_config()
             if hasattr(self, 'txt_missing_reasons'):
                 raw_r = self.txt_missing_reasons.get("1.0", tk.END)
                 r_list = [line.strip() for line in raw_r.splitlines() if line.strip()]
@@ -6335,7 +6389,7 @@ class VideoBackupApp:
         self.entry_dash_keywords = ttk.Entry(f_fp1, width=42)
         self.entry_dash_keywords.insert(0, self.config.get("dashcam_keywords", DEFAULT_DASHCAM_KEYWORDS))
         self.entry_dash_keywords.pack(side="left", padx=4)
-        ttk.Label(f_fp1, text="例: CARDV, NORMAL, EVENT, MOVIE", foreground="#666666", font=('Helvetica', 9)).pack(side="left", padx=2)
+        ttk.Label(f_fp1, text="例: CAREC, CARDV, NORMAL, EVENT", foreground="#666666", font=('Helvetica', 9)).pack(side="left", padx=2)
 
         f_fp2 = ttk.Frame(frame_fingerprint)
         f_fp2.pack(fill="x", pady=2)
@@ -6351,7 +6405,15 @@ class VideoBackupApp:
         self.entry_body_keywords = ttk.Entry(f_fp3, width=42)
         self.entry_body_keywords.insert(0, self.config.get("bodycam_keywords", DEFAULT_BODYCAM_KEYWORDS))
         self.entry_body_keywords.pack(side="left", padx=4)
-        ttk.Label(f_fp3, text="例: DCIM, 100MEDIA, RECORD, BODYCAM", foreground="#666666", font=('Helvetica', 9)).pack(side="left", padx=2)
+        ttk.Label(f_fp3, text="例: DPB30, VIDEO, DCIM, 密錄器 (嚴格依此比對)", foreground="#666666", font=('Helvetica', 9)).pack(side="left", padx=2)
+
+        f_fp_excl = ttk.Frame(frame_fingerprint)
+        f_fp_excl.pack(fill="x", pady=2)
+        ttk.Label(f_fp_excl, text="排除常態硬碟關鍵字：", width=20).pack(side="left")
+        self.entry_excluded_disk_keywords = ttk.Entry(f_fp_excl, width=42)
+        self.entry_excluded_disk_keywords.insert(0, self.config.get("excluded_disk_keywords", DEFAULT_EXCLUDED_DISK_KEYWORDS))
+        self.entry_excluded_disk_keywords.pack(side="left", padx=4)
+        ttk.Label(f_fp_excl, text="例: TRANSCEND, RECOVERRX (忽略常駐外接備份硬碟)", foreground="#C62828", font=('Helvetica', 9)).pack(side="left", padx=2)
 
         f_fp4 = ttk.Frame(frame_fingerprint)
         f_fp4.pack(fill="x", pady=2)
@@ -6453,7 +6515,7 @@ class VideoBackupApp:
         _bind_settings_wheel(parent)
 
     def reset_fingerprint_defaults(self):
-        """將智慧設備特徵指紋與搜尋寬限期還原為官方預設值"""
+        """將智慧設備特徵指紋、排除清單與搜尋寬限期還原為官方預設值"""
         if hasattr(self, 'entry_dash_keywords'):
             self.entry_dash_keywords.delete(0, tk.END)
             self.entry_dash_keywords.insert(0, DEFAULT_DASHCAM_KEYWORDS)
@@ -6463,10 +6525,13 @@ class VideoBackupApp:
         if hasattr(self, 'entry_body_keywords'):
             self.entry_body_keywords.delete(0, tk.END)
             self.entry_body_keywords.insert(0, DEFAULT_BODYCAM_KEYWORDS)
+        if hasattr(self, 'entry_excluded_disk_keywords'):
+            self.entry_excluded_disk_keywords.delete(0, tk.END)
+            self.entry_excluded_disk_keywords.insert(0, DEFAULT_EXCLUDED_DISK_KEYWORDS)
         if hasattr(self, 'entry_time_buffer_minutes'):
             self.entry_time_buffer_minutes.delete(0, tk.END)
             self.entry_time_buffer_minutes.insert(0, str(DEFAULT_TIME_BUFFER_MINUTES))
-        messagebox.showinfo("還原預設值", "已成功將設備特徵指紋與時間寬限期還原為官方預設規則！\n請記得點擊「💾 儲存所有設定」使其生效。")
+        messagebox.showinfo("還原預設值", "已成功將設備特徵指紋、排除硬碟清單與時間寬限期還原為官方預設規則！\n請記得點擊「💾 儲存所有設定」使其生效。")
 
     def find_car_profile_display(self, profile_key: str) -> str:
         """根據 Chrome 設定檔目錄名反查下拉選單顯示字串"""
@@ -7195,6 +7260,12 @@ class VideoBackupApp:
         self.save_config()
         self.load_officer_names_from_roster()
         self.update_comboboxes_all_tabs()
+        # 儲存特徵/排除設定後，立即套用最新規則重新掃描全部分頁之設備連線狀態
+        for t in self.task_tabs:
+            try:
+                t.refresh_device_connections(show_toast=False)
+            except Exception:
+                pass
 
         roster_p = self.config.get("roster_path", "")
         roster_name = os.path.basename(roster_p) if roster_p else "未指定"
