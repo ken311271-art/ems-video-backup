@@ -48,12 +48,16 @@
   "label_bodycam1": "BODYCAM1",
   "label_bodycam2": "BODYCAM2",
   "label_bodycam3": "BODYCAM3",
-  "roster_path": "",
-  "update_dir": "",
-  "hide_base_settings": false,
-  "station_name": "消防分隊",
   "dashcam_keywords": "CARDV, NORMAL, EVENT, PARK, MOVIE, TS, EMR, FRONT, REAR, CAR_DVR",
   "dashcam_fn_patterns": "_F., _R., NORMAL_, EVENT_",
   "bodycam_keywords": "DCIM, 100MEDIA, 100DSCIM, RECORD, VIDEO, AUDIO, PHOTO, BODYCAM, POLICE, AEE, TRANSCEND",
-  "time_buffer_minutes": 15
+  "time_buffer_minutes": 15,
+  "roster_path": "",
+  "update_dir": "",
+  "hide_base_settings": false,
+  "car_system_url": "http://car.tccf.gov.tw/car/",
+  "car_chrome_profile": "Profile 3",
+  "car_preferred_account": "AUTO",
+  "car_heartbeat_enabled": true,
+  "station_name": "消防分隊"
 }

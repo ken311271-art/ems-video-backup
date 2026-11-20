@@ -5989,42 +5989,6 @@ class VideoBackupApp:
             foreground="#555555"
         ).pack(anchor="w", pady=(3, 0))
 
-        # 需求 9: 快速設定頁面常態包含「密錄器 3 硬碟名稱」
-        frame_settings = ttk.LabelFrame(parent, text="【快速設定】各設備對應硬碟標籤名稱 (Volume Label)", padding=10)
-        frame_settings.pack(fill="x", **pad)
-
-        f_s1 = ttk.Frame(frame_settings)
-        f_s1.pack(fill="x", pady=3)
-        ttk.Label(f_s1, text="行車紀錄器硬碟名稱：", width=18).pack(side="left")
-        self.entry_label_dashcam = ttk.Entry(f_s1, width=25)
-        self.entry_label_dashcam.insert(0, self.config.get("label_dashcam", "DASHCAM"))
-        self.entry_label_dashcam.pack(side="left", padx=4)
-        ttk.Label(f_s1, text="例: DASHCAM 或 TRANSCEND", foreground="#666666").pack(side="left", padx=4)
-
-        f_s2 = ttk.Frame(frame_settings)
-        f_s2.pack(fill="x", pady=3)
-        ttk.Label(f_s2, text="密錄器 1 硬碟名稱：", width=18).pack(side="left")
-        self.entry_label_b1 = ttk.Entry(f_s2, width=25)
-        self.entry_label_b1.insert(0, self.config.get("label_bodycam1", "BODYCAM1"))
-        self.entry_label_b1.pack(side="left", padx=4)
-        ttk.Label(f_s2, text="例: BODYCAM1 或 CAM1", foreground="#666666").pack(side="left", padx=4)
-
-        f_s3 = ttk.Frame(frame_settings)
-        f_s3.pack(fill="x", pady=3)
-        ttk.Label(f_s3, text="密錄器 2 硬碟名稱：", width=18).pack(side="left")
-        self.entry_label_b2 = ttk.Entry(f_s3, width=25)
-        self.entry_label_b2.insert(0, self.config.get("label_bodycam2", "BODYCAM2"))
-        self.entry_label_b2.pack(side="left", padx=4)
-        ttk.Label(f_s3, text="例: BODYCAM2 或 CAM2", foreground="#666666").pack(side="left", padx=4)
-
-        f_s4 = ttk.Frame(frame_settings)
-        f_s4.pack(fill="x", pady=3)
-        ttk.Label(f_s4, text="密錄器 3 硬碟名稱：", width=18).pack(side="left")
-        self.entry_label_b3 = ttk.Entry(f_s4, width=25)
-        self.entry_label_b3.insert(0, self.config.get("label_bodycam3", "BODYCAM3"))
-        self.entry_label_b3.pack(side="left", padx=4)
-        ttk.Label(f_s4, text="例: BODYCAM3 或 CAM3", foreground="#666666").pack(side="left", padx=4)
-
         # 需求：智慧設備指紋特徵與搜尋寬限期自訂 (v4.4 防呆免對齊，可自由增修)
         frame_fingerprint = ttk.LabelFrame(parent, text="【智慧設備特徵指紋 ＆ 搜尋演算法自訂】(v4.4 防呆免對齊，可自由增修)", padding=10)
         frame_fingerprint.pack(fill="x", **pad)
@@ -6126,7 +6090,7 @@ class VideoBackupApp:
 
         self.btn_save_cfg = ttk.Button(
             frame_save_bar,
-            text="💾 儲存所有設定 (含車輛系統、更新資料夾、勤務表路徑、設備標籤與原因)",
+            text="💾 儲存所有設定 (含車輛系統、更新資料夾、勤務表路徑、特徵指紋與原因)",
             command=self.save_settings_clicked
         )
         self.btn_save_cfg.pack(side="left", ipady=3)
@@ -6921,7 +6885,6 @@ class VideoBackupApp:
             f"• 自動更新資料夾：{update_p if update_p else '（未指定）'}\n"
             f"• 當月勤務表目錄：{roster_p if roster_p else '（未指定）'}\n"
             "• 設備特徵指紋規則：已更新自訂特徵與寬限期 (支援各廠牌設備)\n"
-            "• 設備隨身碟標籤：已更新記憶 (Volume Label 雙重驗證)\n"
             "• 未錄影備註原因：已更新自訂清單\n"
             "• 同仁姓名下拉選單：已同步更新最新名冊\n\n"
             "返回【主要備份作業】分頁即可直接使用。"
