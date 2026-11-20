@@ -2777,15 +2777,15 @@ class ArchiveTaskTab(ttk.Frame):
         # 列 0: 行車紀錄器連線狀態 (按需求：不顯示路徑字眼，僅顯示狀態燈號)
         f_dash_status = ttk.Frame(frame_step2)
         f_dash_status.pack(fill="x", pady=2)
-        ttk.Label(f_dash_status, text="行車紀錄器：", width=14).pack(side="left")
+        ttk.Label(f_dash_status, text="行車紀錄器：", width=15).pack(side="left")
         self.lbl_status_dashcam = ttk.Label(f_dash_status, text="⚪ 未檢測", width=16, anchor="w", foreground="#888888", font=('Helvetica', 9))
         self.lbl_status_dashcam.pack(side="left", padx=2)
         ttk.Label(f_dash_status, text="↳ (USB 讀卡機；3人出勤時與密錄器看哪台先好就拔哪台交換)", foreground="#666666", font=('Helvetica', 9)).pack(side="left", padx=6)
 
-        # 列 1: 密錄器 1 (狀態燈號移至前面與行車標齊，後接出勤同仁)
+        # 列 1: 密錄器 第一台 (狀態燈號移至前面與行車標齊，後接出勤同仁)
         f_name1 = ttk.Frame(frame_step2)
         f_name1.pack(fill="x", pady=2)
-        ttk.Label(f_name1, text="密錄器 1：", width=14).pack(side="left")
+        ttk.Label(f_name1, text="密錄器：第一台", width=15).pack(side="left")
         self.lbl_status_name1 = ttk.Label(f_name1, text="⚪ 未檢測", width=16, anchor="w", foreground="#888888", font=('Helvetica', 9))
         self.lbl_status_name1.pack(side="left", padx=2)
         ttk.Label(f_name1, text="出勤同仁：").pack(side="left", padx=(4, 2))
@@ -2795,10 +2795,10 @@ class ArchiveTaskTab(ttk.Frame):
         self.entry_name1.pack(side="left", padx=2)
         self.bind_officer_autocomplete(self.entry_name1)
 
-        # 列 2: 密錄器 2 (狀態燈號移至前面與行車標齊，後接出勤同仁與動態換插按鈕)
+        # 列 2: 密錄器 第二台 (狀態燈號移至前面與行車標齊，後接出勤同仁與預先開放換插核取方塊)
         f_name2 = ttk.Frame(frame_step2)
         f_name2.pack(fill="x", pady=2)
-        ttk.Label(f_name2, text="密錄器 2：", width=14).pack(side="left")
+        ttk.Label(f_name2, text="密錄器：第二台", width=15).pack(side="left")
         self.lbl_status_name2 = ttk.Label(f_name2, text="⚪ 未檢測", width=16, anchor="w", foreground="#888888", font=('Helvetica', 9))
         self.lbl_status_name2.pack(side="left", padx=2)
         ttk.Label(f_name2, text="出勤同仁：").pack(side="left", padx=(4, 2))
@@ -2807,13 +2807,15 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_name2.set(init_name2)
         self.entry_name2.pack(side="left", padx=2)
         self.bind_officer_autocomplete(self.entry_name2)
-        self.btn_swap_b2 = ttk.Button(f_name2, text="➕ 換插第2位隊員", command=self.toggle_swap_b2)
-        self.btn_swap_b2.pack(side="left", padx=6)
+        self.var_preopen_b2 = tk.BooleanVar(value=False)
+        self.chk_preopen_b2 = ttk.Checkbutton(f_name2, text="預先開放換插", variable=self.var_preopen_b2, command=self.on_toggle_preopen_b2)
+        self.chk_preopen_b2.pack(side="left", padx=6)
+        self.btn_swap_b2 = self.chk_preopen_b2  # 向後相容屬性參照
 
-        # 列 3: 密錄器 3 (狀態燈號移至前面與行車標齊，後接出勤同仁與動態換插按鈕)
+        # 列 3: 密錄器 第三台 (狀態燈號移至前面與行車標齊，後接出勤同仁與預先開放換插核取方塊)
         f_name3 = ttk.Frame(frame_step2)
         f_name3.pack(fill="x", pady=2)
-        ttk.Label(f_name3, text="密錄器 3：", width=14).pack(side="left")
+        ttk.Label(f_name3, text="密錄器：第三台", width=15).pack(side="left")
         self.lbl_status_name3 = ttk.Label(f_name3, text="⚪ 未檢測", width=16, anchor="w", foreground="#888888", font=('Helvetica', 9))
         self.lbl_status_name3.pack(side="left", padx=2)
         ttk.Label(f_name3, text="出勤同仁：").pack(side="left", padx=(4, 2))
@@ -2822,8 +2824,10 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_name3.set(init_name3)
         self.entry_name3.pack(side="left", padx=2)
         self.bind_officer_autocomplete(self.entry_name3)
-        self.btn_swap_b3 = ttk.Button(f_name3, text="➕ 換插第3位隊員", command=self.toggle_swap_b3)
-        self.btn_swap_b3.pack(side="left", padx=6)
+        self.var_preopen_b3 = tk.BooleanVar(value=False)
+        self.chk_preopen_b3 = ttk.Checkbutton(f_name3, text="預先開放換插", variable=self.var_preopen_b3, command=self.on_toggle_preopen_b3)
+        self.chk_preopen_b3.pack(side="left", padx=6)
+        self.btn_swap_b3 = self.chk_preopen_b3  # 向後相容屬性參照
         self.lbl_hint_b3 = ttk.Label(f_name3, text="↳ (3人出勤換插；電腦3孔，任一設備完成後自動提示換插)", foreground="#007ACC", font=('Helvetica', 9))
         self.lbl_hint_b3.pack(side="left", padx=2)
 
@@ -3138,49 +3142,37 @@ class ArchiveTaskTab(ttk.Frame):
         """相容舊版手動解鎖按鈕呼叫"""
         self.toggle_swap_b3()
 
-    def toggle_swap_b2(self):
-        """【一鍵換插/取消】密錄器 2 預約換插切換"""
-        curr_b2 = self.entry_bodycam2_src.get().strip() if hasattr(self, 'entry_bodycam2_src') else ""
-        label_b2 = self.app.config.get("label_bodycam2", "BODYCAM2").strip()
-        is_b2, _ = is_device_connected(curr_b2, label_b2)
-        if is_b2:
-            messagebox.showinfo("設備已連線", "密錄器 2 目前已在電腦連線中，將在第一批直接複製，無需換插！")
-            return
-
+    def on_toggle_preopen_b2(self):
+        """【由使用者決定是否預先開】密錄器 第二台 預先開放換插核取方塊切換"""
+        is_checked = self.var_preopen_b2.get()
         names = getattr(self, 'pending_roster_names', [])
         target_name = names[1] if len(names) >= 2 else ""
 
-        if not getattr(self, 'is_swap_reserved_b2', False):
-            # 啟用換插
+        if is_checked:
             self.is_swap_reserved_b2 = True
             self.entry_name2.config(state="normal")
-            if target_name:
+            if target_name and not self.entry_name2.get().strip():
                 self.entry_name2.set(target_name)
             self.lbl_status_name2.config(text="⏳ 待換插", foreground="#E65100")
-            self.update_swap_buttons_visibility()
+            chk_txt = f"已預先開放 (換插: {target_name})" if target_name else "已預先開放 (待換插)"
+            self.chk_preopen_b2.config(text=chk_txt)
             curr_val = self.entry_name2.get().strip()
-            self.log(f"⏳ [預約換插] 密錄器 2 已設定為接續換插設備 (出勤同仁: {curr_val or '待選'})。")
-            self.update_status(f"狀態：密錄器 2 已預約換插【{curr_val or '接續同仁'}】", "#E65100")
+            self.log(f"⏳ [預先開放] 密錄器 第二台 已開放為待換插 (出勤同仁: {curr_val or '待選'})。")
+            self.update_status(f"狀態：密錄器 第二台 已預先開放【{curr_val or '接續同仁'}】", "#E65100")
         else:
-            # 取消換插
             self.is_swap_reserved_b2 = False
             self.entry_name2.config(state="normal")
             self.entry_name2.set("")
             self.entry_name2.config(state="disabled")
             self.lbl_status_name2.config(text="⚪ 未連線", foreground="#888888")
-            self.update_swap_buttons_visibility()
-            self.log("ℹ️ [取消換插] 密錄器 2 已取消預約換插，恢復反灰關閉。")
-            self.update_status("狀態：密錄器 2 已取消換插", "#555555")
+            chk_txt = f"預先開放換插 ({target_name})" if target_name else "預先開放換插"
+            self.chk_preopen_b2.config(text=chk_txt)
+            self.log("ℹ️ [關閉開放] 密錄器 第二台 已關閉，恢復反灰。")
+            self.update_status("狀態：密錄器 第二台 已關閉", "#555555")
 
-    def toggle_swap_b3(self):
-        """【一鍵換插/取消】密錄器 3 預約換插切換"""
-        curr_b3 = self.entry_bodycam3_src.get().strip() if hasattr(self, 'entry_bodycam3_src') else ""
-        label_b3 = self.app.config.get("label_bodycam3", "BODYCAM3").strip()
-        is_b3, _ = is_device_connected(curr_b3, label_b3)
-        if is_b3:
-            messagebox.showinfo("設備已連線", "密錄器 3 目前已在電腦連線中，將在第一批直接複製，無需換插！")
-            return
-
+    def on_toggle_preopen_b3(self):
+        """【由使用者決定是否預先開】密錄器 第三台 預先開放換插核取方塊切換"""
+        is_checked = self.var_preopen_b3.get()
         names = getattr(self, 'pending_roster_names', [])
         target_name = ""
         if len(names) >= 3:
@@ -3188,120 +3180,118 @@ class ArchiveTaskTab(ttk.Frame):
         elif len(names) == 2 and not getattr(self, 'is_swap_reserved_b2', False):
             target_name = names[1]
 
-        if not getattr(self, 'is_swap_reserved_b3', False):
-            # 啟用換插
+        if is_checked:
             self.is_swap_reserved_b3 = True
             self.entry_name3.config(state="normal")
-            if target_name:
+            if target_name and not self.entry_name3.get().strip():
                 self.entry_name3.set(target_name)
             self.lbl_status_name3.config(text="⏳ 待換插", foreground="#E65100")
-            self.update_swap_buttons_visibility()
+            chk_txt = f"已預先開放 (換插: {target_name})" if target_name else "已預先開放 (待換插)"
+            self.chk_preopen_b3.config(text=chk_txt)
             curr_val = self.entry_name3.get().strip()
-            self.log(f"⏳ [預約換插] 密錄器 3 已設定為接續換插設備 (出勤同仁: {curr_val or '待選'})。")
-            self.update_status(f"狀態：密錄器 3 已預約換插【{curr_val or '接續同仁'}】", "#E65100")
+            self.log(f"⏳ [預先開放] 密錄器 第三台 已開放為待換插 (出勤同仁: {curr_val or '待選'})。")
+            self.update_status(f"狀態：密錄器 第三台 已預先開放【{curr_val or '接續同仁'}】", "#E65100")
         else:
-            # 取消換插
             self.is_swap_reserved_b3 = False
             self.entry_name3.config(state="normal")
             self.entry_name3.set("")
             self.entry_name3.config(state="disabled")
             self.lbl_status_name3.config(text="⚪ 未連線", foreground="#888888")
-            self.update_swap_buttons_visibility()
-            self.log("ℹ️ [取消換插] 密錄器 3 已取消預約換插，恢復反灰關閉。")
-            self.update_status("狀態：密錄器 3 已取消換插", "#555555")
+            chk_txt = f"預先開放換插 ({target_name})" if target_name else "預先開放換插"
+            self.chk_preopen_b3.config(text=chk_txt)
+            self.log("ℹ️ [關閉開放] 密錄器 第三台 已關閉，恢復反灰。")
+            self.update_status("狀態：密錄器 第三台 已關閉", "#555555")
+
+    def toggle_swap_b2(self):
+        """向後相容呼叫"""
+        self.var_preopen_b2.set(not self.var_preopen_b2.get())
+        self.on_toggle_preopen_b2()
+
+    def toggle_swap_b3(self):
+        """向後相容呼叫"""
+        self.var_preopen_b3.set(not self.var_preopen_b3.get())
+        self.on_toggle_preopen_b3()
 
     def update_swap_buttons_visibility(self):
-        """動態更新密錄器 2 與 密錄器 3 之換插按鈕顯示與文字
-        規則：
-        • 設備若實際連線 (🟢 綠燈)：已在電腦連線直接複製，無需換插，自動隱藏換插按鈕。
-        • 設備若未連線 (⚪ 白燈)：常態顯示換插按鈕！
-          - 若處於預約換插狀態：顯示 [↩️ 取消換插]
-          - 若未預約換插：
-            如有排班同仁姓名，顯示 [➕ 換插第X位 (姓名)]
-            若無排班姓名或尚未選擇時段，顯示 [➕ 換插第X位隊員]
-        """
-        if not hasattr(self, 'btn_swap_b2') or not hasattr(self, 'btn_swap_b3'):
-            return
-
-        curr_b2 = self.entry_bodycam2_src.get().strip() if hasattr(self, 'entry_bodycam2_src') else ""
-        curr_b3 = self.entry_bodycam3_src.get().strip() if hasattr(self, 'entry_bodycam3_src') else ""
-
-        label_b2 = self.app.config.get("label_bodycam2", "BODYCAM2").strip()
-        label_b3 = self.app.config.get("label_bodycam3", "BODYCAM3").strip()
-
-        is_b2, _ = is_device_connected(curr_b2, label_b2)
-        is_b3, _ = is_device_connected(curr_b3, label_b3)
-
+        """動態更新第二台與第三台之預先開放換插核取方塊文字與顯示"""
         names = getattr(self, 'pending_roster_names', [])
+        name2 = names[1] if len(names) >= 2 else ""
+        name3 = names[2] if len(names) >= 3 else ""
 
-        # 1. 密錄器 2 按鈕控制
-        if is_b2:
-            self.btn_swap_b2.pack_forget()
-        else:
-            if getattr(self, 'is_swap_reserved_b2', False):
-                self.btn_swap_b2.config(text="↩️ 取消換插")
+        # 第二台勾選框文字
+        if hasattr(self, 'chk_preopen_b2'):
+            if self.var_preopen_b2.get():
+                self.chk_preopen_b2.config(text=f"已預先開放 (換插: {name2})" if name2 else "已預先開放 (待換插)")
             else:
-                if len(names) >= 2 and names[1]:
-                    self.btn_swap_b2.config(text=f"➕ 換插第2位 ({names[1]})")
-                else:
-                    self.btn_swap_b2.config(text="➕ 換插第2位隊員")
-            if self.btn_swap_b2.winfo_manager() != "pack":
-                self.btn_swap_b2.pack(side="left", padx=6)
+                self.chk_preopen_b2.config(text=f"預先開放換插 ({name2})" if name2 else "預先開放換插")
 
-        # 2. 密錄器 3 按鈕控制
-        if is_b3:
-            self.btn_swap_b3.pack_forget()
-        else:
-            if getattr(self, 'is_swap_reserved_b3', False):
-                self.btn_swap_b3.config(text="↩️ 取消換插")
+        # 第三台勾選框文字
+        if hasattr(self, 'chk_preopen_b3'):
+            if self.var_preopen_b3.get():
+                self.chk_preopen_b3.config(text=f"已預先開放 (換插: {name3})" if name3 else "已預先開放 (待換插)")
             else:
-                if len(names) >= 3 and names[2]:
-                    self.btn_swap_b3.config(text=f"➕ 換插第3位 ({names[2]})")
-                elif len(names) == 2 and not getattr(self, 'is_swap_reserved_b2', False) and names[1]:
-                    self.btn_swap_b3.config(text=f"➕ 換插第3位 ({names[1]})")
-                else:
-                    self.btn_swap_b3.config(text="➕ 換插第3位隊員")
-            if self.btn_swap_b3.winfo_manager() != "pack":
-                if hasattr(self, 'lbl_hint_b3') and self.lbl_hint_b3.winfo_manager() == "pack":
-                    self.btn_swap_b3.pack(side="left", padx=6, before=self.lbl_hint_b3)
-                else:
-                    self.btn_swap_b3.pack(side="left", padx=6)
+                self.chk_preopen_b3.config(text=f"預先開放換插 ({name3})" if name3 else "預先開放換插")
 
     def refresh_device_connections(self, show_toast=False):
-        """【出勤設備連線狀態刷新 ＆ 動態反灰防呆】
-        先偵測哪一個設備有插進去：
-        • 有連線之設備：開放輸入欄位（state="normal"，白色底色，可選取或修改姓名）。
-        • 沒連線之設備：直接關閉反灰（state="disabled"，禁止點選，並清空文字）。
-        • 若處於預約換插狀態（is_swap_reserved_bX）：保持開放與 ⏳ 待換插 燈號。
+        """【出勤設備連線狀態刷新 ＆ 依連線順序開啟反白防呆】
+        核心原則：
+        1. 密錄器不限定死板硬體代號 (BODYCAM1/2/3)，依連線順序開啟反白！
+        2. 連線 1 台 ➔ 開啟第一台；連線 2 台 ➔ 依序開啟第一、二台；連線 3 台 ➔ 全數開啟。
+        3. 未連線之槽位：預設反灰關閉 (disabled)，由使用者透過「預先開放換插」核取方塊自主決定是否預先開！
         """
-        label_dash = self.app.config.get("label_dashcam", "DASHCAM").strip()
-        label_b1 = self.app.config.get("label_bodycam1", "BODYCAM1").strip()
-        label_b2 = self.app.config.get("label_bodycam2", "BODYCAM2").strip()
-        label_b3 = self.app.config.get("label_bodycam3", "BODYCAM3").strip()
-
         all_disks = get_all_connected_disks()
-        for src_entry, exp_lbl in [
-            (self.entry_dashcam_src, label_dash),
-            (self.entry_bodycam1_src, label_b1),
-            (self.entry_bodycam2_src, label_b2),
-            (self.entry_bodycam3_src, label_b3),
-        ]:
-            curr = src_entry.get().strip()
-            if not curr or not os.path.exists(curr):
-                fp, _ = find_drive_by_label(exp_lbl, connected_disks=all_disks)
-                if fp:
-                    src_entry.delete(0, tk.END)
-                    src_entry.insert(0, fp)
+        label_dash = self.app.config.get("label_dashcam", "DASHCAM").strip()
 
-        curr_dash = self.entry_dashcam_src.get().strip()
-        curr_b1 = self.entry_bodycam1_src.get().strip()
-        curr_b2 = self.entry_bodycam2_src.get().strip()
-        curr_b3 = self.entry_bodycam3_src.get().strip()
+        # 1. 行車紀錄器獨立辨識
+        dash_path = self.entry_dashcam_src.get().strip()
+        if not dash_path or not os.path.exists(dash_path):
+            fp, _ = find_drive_by_label(label_dash, connected_disks=all_disks)
+            if fp:
+                self.entry_dashcam_src.delete(0, tk.END)
+                self.entry_dashcam_src.insert(0, fp)
+                dash_path = fp
 
-        # 1. 密錄器 1 驗證與開放/反灰控制
-        is_b1, msg_b1 = is_device_connected(curr_b1, label_b1)
-        if is_b1:
-            self.lbl_status_name1.config(text=f"🟢 {msg_b1}", foreground="#2E7D32")
+        is_dash, msg_dash = is_device_connected(dash_path, label_dash)
+        if hasattr(self, 'lbl_status_dashcam'):
+            if is_dash:
+                self.lbl_status_dashcam.config(text=f"🟢 {msg_dash}", foreground="#2E7D32")
+            else:
+                self.lbl_status_dashcam.config(text="⚪ 未連線", foreground="#888888")
+
+        # 2. 收集所有連線中的密錄器隨身碟 (排除行車紀錄器)
+        dash_real_root = os.path.abspath(dash_path) if dash_path and os.path.exists(dash_path) else None
+        connected_bodycams = []
+
+        # (a) 優先檢查現存設定/手動選取之路徑
+        for entry in [self.entry_bodycam1_src, self.entry_bodycam2_src, self.entry_bodycam3_src]:
+            p = entry.get().strip()
+            if p and os.path.exists(p):
+                rp = os.path.abspath(p)
+                if rp != dash_real_root and rp not in connected_bodycams:
+                    connected_bodycams.append(rp)
+
+        # (b) 從目前已連線磁碟尋找符合密錄器標籤之隨身碟
+        bodycam_labels = [
+            self.app.config.get("label_bodycam1", "BODYCAM1").strip().upper(),
+            self.app.config.get("label_bodycam2", "BODYCAM2").strip().upper(),
+            self.app.config.get("label_bodycam3", "BODYCAM3").strip().upper(),
+        ]
+        for d_path, d_vol in all_disks:
+            rp = os.path.abspath(d_path)
+            if rp == dash_real_root or rp in connected_bodycams:
+                continue
+            vol_upper = (d_vol or "").strip().upper()
+            if any(lbl in vol_upper for lbl in bodycam_labels if lbl) or "BODYCAM" in vol_upper:
+                connected_bodycams.append(rp)
+
+        # 3. 依連線順序開啟反白，連線幾台就依序開
+        # 第一台
+        if len(connected_bodycams) >= 1:
+            p1 = connected_bodycams[0]
+            self.entry_bodycam1_src.delete(0, tk.END)
+            self.entry_bodycam1_src.insert(0, p1)
+            _, msg1 = is_device_connected(p1, "")
+            self.lbl_status_name1.config(text=f"🟢 {msg1}", foreground="#2E7D32")
             self.entry_name1.config(state="normal")
         else:
             self.lbl_status_name1.config(text="⚪ 未連線", foreground="#888888")
@@ -3310,52 +3300,77 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_name1.set("")
             self.entry_name1.config(state="disabled")
 
-        # 2. 密錄器 2 驗證與開放/反灰控制
-        is_b2, msg_b2 = is_device_connected(curr_b2, label_b2)
-        if is_b2:
+        # 第二台
+        if len(connected_bodycams) >= 2:
+            p2 = connected_bodycams[1]
+            self.entry_bodycam2_src.delete(0, tk.END)
+            self.entry_bodycam2_src.insert(0, p2)
+            _, msg2 = is_device_connected(p2, "")
+            self.lbl_status_name2.config(text=f"🟢 {msg2}", foreground="#2E7D32")
+            self.entry_name2.config(state="normal")
             self.is_swap_reserved_b2 = False
-            self.lbl_status_name2.config(text=f"🟢 {msg_b2}", foreground="#2E7D32")
-            self.entry_name2.config(state="normal")
-            if hasattr(self, 'btn_swap_b2'):
-                self.btn_swap_b2.pack_forget()
-        elif getattr(self, 'is_swap_reserved_b2', False):
-            self.lbl_status_name2.config(text="⏳ 待換插", foreground="#E65100")
-            self.entry_name2.config(state="normal")
+            self.var_preopen_b2.set(False)
+            if hasattr(self, 'chk_preopen_b2'):
+                self.chk_preopen_b2.pack_forget()
         else:
-            self.lbl_status_name2.config(text="⚪ 未連線", foreground="#888888")
-            if str(self.entry_name2.cget("state")) != "normal":
+            # 第二台未連線：顯示勾選方塊，由使用者決定是否預先開
+            if hasattr(self, 'chk_preopen_b2') and self.chk_preopen_b2.winfo_manager() != "pack":
+                self.chk_preopen_b2.pack(side="left", padx=6)
+            if self.var_preopen_b2.get():
+                self.lbl_status_name2.config(text="⏳ 待換插", foreground="#E65100")
                 self.entry_name2.config(state="normal")
-            self.entry_name2.set("")
-            self.entry_name2.config(state="disabled")
-
-        # 3. 行車紀錄器驗證
-        is_dash, msg_dash = is_device_connected(curr_dash, label_dash)
-        if hasattr(self, 'lbl_status_dashcam'):
-            if is_dash:
-                self.lbl_status_dashcam.config(text=f"🟢 {msg_dash}", foreground="#2E7D32")
+                self.is_swap_reserved_b2 = True
             else:
-                self.lbl_status_dashcam.config(text="⚪ 未連線", foreground="#888888")
+                self.lbl_status_name2.config(text="⚪ 未連線", foreground="#888888")
+                if str(self.entry_name2.cget("state")) != "normal":
+                    self.entry_name2.config(state="normal")
+                self.entry_name2.set("")
+                self.entry_name2.config(state="disabled")
+                self.is_swap_reserved_b2 = False
 
-        # 4. 密錄器 3 驗證與開放/反灰控制
-        is_b3, msg_b3 = is_device_connected(curr_b3, label_b3)
-        if is_b3:
+        # 第三台
+        if len(connected_bodycams) >= 3:
+            p3 = connected_bodycams[2]
+            self.entry_bodycam3_src.delete(0, tk.END)
+            self.entry_bodycam3_src.insert(0, p3)
+            _, msg3 = is_device_connected(p3, "")
+            self.lbl_status_name3.config(text=f"🟢 {msg3}", foreground="#2E7D32")
+            self.entry_name3.config(state="normal")
             self.is_swap_reserved_b3 = False
-            self.lbl_status_name3.config(text=f"🟢 {msg_b3}", foreground="#2E7D32")
-            self.entry_name3.config(state="normal")
-            if hasattr(self, 'btn_swap_b3'):
-                self.btn_swap_b3.pack_forget()
-        elif getattr(self, 'is_swap_reserved_b3', False):
-            self.lbl_status_name3.config(text="⏳ 待換插", foreground="#E65100")
-            self.entry_name3.config(state="normal")
+            self.var_preopen_b3.set(False)
+            if hasattr(self, 'chk_preopen_b3'):
+                self.chk_preopen_b3.pack_forget()
         else:
-            self.lbl_status_name3.config(text="⚪ 未連線", foreground="#888888")
-            if str(self.entry_name3.cget("state")) != "normal":
+            # 第三台未連線：顯示勾選方塊，由使用者決定是否預先開
+            if hasattr(self, 'chk_preopen_b3') and self.chk_preopen_b3.winfo_manager() != "pack":
+                if hasattr(self, 'lbl_hint_b3') and self.lbl_hint_b3.winfo_manager() == "pack":
+                    self.chk_preopen_b3.pack(side="left", padx=6, before=self.lbl_hint_b3)
+                else:
+                    self.chk_preopen_b3.pack(side="left", padx=6)
+            if self.var_preopen_b3.get():
+                self.lbl_status_name3.config(text="⏳ 待換插", foreground="#E65100")
                 self.entry_name3.config(state="normal")
-            self.entry_name3.set("")
-            self.entry_name3.config(state="disabled")
+                self.is_swap_reserved_b3 = True
+            else:
+                self.lbl_status_name3.config(text="⚪ 未連線", foreground="#888888")
+                if str(self.entry_name3.cget("state")) != "normal":
+                    self.entry_name3.config(state="normal")
+                self.entry_name3.set("")
+                self.entry_name3.config(state="disabled")
+                self.is_swap_reserved_b3 = False
 
-        # 5. 更新換插按鈕顯示與文字
+        # 4. 更新勾選框文字（如帶入排班姓名）
         self.update_swap_buttons_visibility()
+
+        if show_toast:
+            dash_txt = self.lbl_status_dashcam.cget("text") if hasattr(self, 'lbl_status_dashcam') else ""
+            summary_parts = []
+            if dash_txt:
+                summary_parts.append(f"行車: {dash_txt}")
+            summary_parts.append(f"第一台: {self.lbl_status_name1.cget('text')}")
+            summary_parts.append(f"第二台: {self.lbl_status_name2.cget('text')}")
+            summary_parts.append(f"第三台: {self.lbl_status_name3.cget('text')}")
+            self.log(f"🔄 [設備連線刷新] {'、'.join(summary_parts)}")
 
         if show_toast:
             dash_txt = self.lbl_status_dashcam.cget("text") if hasattr(self, 'lbl_status_dashcam') else ""
@@ -3999,15 +4014,16 @@ class ArchiveTaskTab(ttk.Frame):
         # 3. 針對有開放（連線）之設備依序填入勤務人員：
         # 核心防呆邏輯：若插進的設備只有 1 個，但有 2 名勤務人員，則只填入連線的 1 位即可，其餘反灰關閉
         assigned_records = []
+        slot_names = {1: "第一台", 2: "第二台", 3: "第三台"}
         for i, (idx, entry) in enumerate(open_slots):
             if i < len(names):
                 person_name = names[i]
                 entry.set(person_name)
-                assigned_records.append(f"密錄器 {idx}【{person_name}】")
+                assigned_records.append(f"密錄器：{slot_names.get(idx, '設備')}【{person_name}】")
             else:
                 entry.set("")
 
-        # 4. 動態更新換插按鈕顯示（僅在下一個未連線槽位顯示按鈕）
+        # 4. 動態更新勾選方塊文字（如帶入未連線之排班人員姓名）
         self.update_swap_buttons_visibility()
 
         prev_label = f" (前一日 {duty_month:02d}/{duty_day:02d} 凌晨勤務)" if is_prev else ""
@@ -4025,8 +4041,8 @@ class ArchiveTaskTab(ttk.Frame):
         self.log(log_msg)
 
         if hasattr(self, 'lbl_roster_hint'):
-            hint_clean = "、".join([r.replace("密錄器 ", "").replace("【", "").replace("】", "") for r in assigned_records])
-            more_hint = f" (尚有【{names[len(open_slots)]}】若需換插請點換插按鈕)" if len(names) > len(open_slots) else ""
+            hint_clean = "、".join([r.replace("密錄器：", "").replace("【", "").replace("】", "") for r in assigned_records])
+            more_hint = f" (尚有【{names[len(open_slots)]}】若需換插可勾選預先開放)" if len(names) > len(open_slots) else ""
             self.lbl_roster_hint.config(
                 text=f"✅ 已帶入 {time_slot_str}{prev_label}：{hint_clean}{more_hint}",
                 foreground="#2E7D32"
@@ -4183,11 +4199,11 @@ class ArchiveTaskTab(ttk.Frame):
         if req_dash:
             needed_devices.append(("dashcam", "🚗 行車紀錄器", dashcam_src, dash_conn, dash_msg, ""))
         if req_b1:
-            needed_devices.append(("bodycam1", f"📹 密錄器 1 ({name1 if name1 else '未填姓名'})", bodycam1_src, b1_conn, b1_msg, name1))
+            needed_devices.append(("bodycam1", f"📹 密錄器：第一台 ({name1 if name1 else '未填姓名'})", bodycam1_src, b1_conn, b1_msg, name1))
         if req_b2:
-            needed_devices.append(("bodycam2", f"📹 密錄器 2 ({name2 if name2 else '未填姓名'})", bodycam2_src, b2_conn, b2_msg, name2))
+            needed_devices.append(("bodycam2", f"📹 密錄器：第二台 ({name2 if name2 else '未填姓名'})", bodycam2_src, b2_conn, b2_msg, name2))
         if req_b3:
-            needed_devices.append(("bodycam3", f"📹 密錄器 3 ({name3 if name3 else '未填姓名'})", bodycam3_src, b3_conn, b3_msg, name3))
+            needed_devices.append(("bodycam3", f"📹 密錄器：第三台 ({name3 if name3 else '未填姓名'})", bodycam3_src, b3_conn, b3_msg, name3))
 
         # 計算已連線設備數量
         connected_count = sum(1 for dev in needed_devices if dev[3])
@@ -4391,9 +4407,9 @@ class ArchiveTaskTab(ttk.Frame):
 
         dev_name_map = {
             "dashcam": "行車紀錄器",
-            "bodycam1": "密錄器 1",
-            "bodycam2": "密錄器 2",
-            "bodycam3": "密錄器 3"
+            "bodycam1": "密錄器：第一台",
+            "bodycam2": "密錄器：第二台",
+            "bodycam3": "密錄器：第三台"
         }
         base_name = dev_name_map.get(target_dev_type, "待換插設備")
         dev_title = f"{base_name} ({target_name})" if target_name else base_name
