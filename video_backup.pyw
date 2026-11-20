@@ -63,8 +63,7 @@ DEFAULT_MISSING_REASONS = [
 # 智慧設備指紋演算法官方預設規則（使用者可於快速設定自訂調整，系統將 100% 嚴格遵循此設定）
 DEFAULT_DASHCAM_KEYWORDS = "CAREC, CARDV, NORMAL, EVENT, PARK, MOVIE, TS, EMR, FRONT, REAR, CAR_DVR"
 DEFAULT_DASHCAM_FN_PATTERNS = "_F., _R., NORMAL_, EVENT_"
-DEFAULT_BODYCAM_KEYWORDS = "DPB30, DPB10, DPB60, DPB70, DCIM, 100MEDIA, 100DSCIM, RECORD, VIDEO, AUDIO, PHOTO, BODYCAM, POLICE, AEE, 密錄器"
-DEFAULT_EXCLUDED_DISK_KEYWORDS = "TRANSCEND, TRANSCENDELITE, RECOVERRX"
+DEFAULT_BODYCAM_KEYWORDS = "DPB30, DPB10, DPB60, DPB70, DCIM, 100MEDIA, 100DSCIM, RECORD, VIDEO, AUDIO, PHOTO, BODYCAM, POLICE, AEE"
 DEFAULT_TIME_BUFFER_MINUTES = 15
 
 def get_duty_date(date_str, start_hour):
@@ -637,10 +636,9 @@ def scan_all_ems_devices(start_dt=None, end_dt=None, config=None, quick_mode=Fal
     """
     【一鍵全裝置智慧掃描與特徵指紋辨識（單一真相來源 ＆ 100% 嚴格遵循使用者特徵設定）】
     核心設計原則：
-    1. 絕不偷塞硬編碼關鍵字：100% 嚴格依照使用者在【系統設定】所設定之「標籤」、「目錄/特徵關鍵字」
-       與「排除常態硬碟清單」進行辨識！使用者刪掉某個特徵字（例如 TRANSCEND）就會立刻生效！
-    2. 無條件排除本機系統槽 C:\、含 Windows/Users 之系統硬碟、存放目標目錄所在硬碟（不論固定或外接），
-       以及命中「常態排除硬碟清單」（如 Transcend1號 / TranscendElite / RecoverRx）之備份硬碟！
+    1. 絕不偷塞硬編碼關鍵字：100% 嚴格依照使用者在【系統設定】所設定之「標籤」與「目錄/特徵關鍵字」
+       進行辨識！使用者刪掉某個特徵字（例如 TRANSCEND）就會立刻生效！
+    2. 自動排除本機系統槽 C:\、含 Windows/Users 之系統硬碟，以及存放目標目錄所在硬碟（不論固定或外接）。
     3. 未符合任何使用者設定之行車紀錄器或密錄器特徵之磁碟，絕不硬抓進密錄器清單，並將原因記錄於 diagnostics。
     """
     # 1. 整理需排除之磁碟代號
@@ -744,12 +742,10 @@ def scan_all_ems_devices(start_dt=None, end_dt=None, config=None, quick_mode=Fal
     raw_dash_kw = config.get("dashcam_keywords") if (config and "dashcam_keywords" in config) else DEFAULT_DASHCAM_KEYWORDS
     raw_dash_fn = config.get("dashcam_fn_patterns") if (config and "dashcam_fn_patterns" in config) else DEFAULT_DASHCAM_FN_PATTERNS
     raw_body_kw = config.get("bodycam_keywords") if (config and "bodycam_keywords" in config) else DEFAULT_BODYCAM_KEYWORDS
-    raw_excl_kw = config.get("excluded_disk_keywords") if (config and "excluded_disk_keywords" in config) else DEFAULT_EXCLUDED_DISK_KEYWORDS
 
     raw_dash_kw = raw_dash_kw if raw_dash_kw is not None else ""
     raw_dash_fn = raw_dash_fn if raw_dash_fn is not None else ""
     raw_body_kw = raw_body_kw if raw_body_kw is not None else ""
-    raw_excl_kw = raw_excl_kw if raw_excl_kw is not None else ""
 
     try:
         buf_mins = int((config.get("time_buffer_minutes") if config else None) or DEFAULT_TIME_BUFFER_MINUTES)
@@ -770,7 +766,6 @@ def scan_all_ems_devices(start_dt=None, end_dt=None, config=None, quick_mode=Fal
     DASH_KEYWORDS = set(_split_tokens(raw_dash_kw))
     DASH_FN_PATTERNS = _split_tokens(raw_dash_fn)
     BODY_KEYWORDS = set(_split_tokens(raw_body_kw))
-    EXCLUDED_KEYWORDS = _split_tokens(raw_excl_kw)
 
     # 共用弱目錄字（避免新密錄器裡單獨一個 EVENT/MOVIE 被誤搶成行車紀錄器）
     AMBIGUOUS_DIRS = {"MOVIE", "NORMAL", "EVENT", "EMR", "TS"}
@@ -800,16 +795,6 @@ def scan_all_ems_devices(start_dt=None, end_dt=None, config=None, quick_mode=Fal
         # 系統硬碟保護
         if top_dirs & OS_SYSTEM_DIRS:
             diagnostics.append(f"{drive_path} [{vol_name or '無標籤'}] (含系統資料夾，自動排除)")
-            continue
-
-        # 常態外接備份硬碟黑名單排除（比對磁碟名稱與頂層資料夾，優先於一切特徵！）
-        hit_excl = None
-        for ex_kw in EXCLUDED_KEYWORDS:
-            if (norm_label and ex_kw in norm_label) or any(ex_kw in d for d in top_dirs):
-                hit_excl = ex_kw
-                break
-        if hit_excl:
-            diagnostics.append(f"{drive_path} [{vol_name or '無標籤'}] (命中排除清單「{hit_excl}」，已略過)")
             continue
 
         # 收集頂層與深層目錄名稱及影片資訊
@@ -5979,7 +5964,6 @@ class VideoBackupApp:
             "dashcam_keywords": DEFAULT_DASHCAM_KEYWORDS,
             "dashcam_fn_patterns": DEFAULT_DASHCAM_FN_PATTERNS,
             "bodycam_keywords": DEFAULT_BODYCAM_KEYWORDS,
-            "excluded_disk_keywords": DEFAULT_EXCLUDED_DISK_KEYWORDS,
             "time_buffer_minutes": DEFAULT_TIME_BUFFER_MINUTES,
             "roster_path": "",
             "update_dir": "",
@@ -5998,7 +5982,7 @@ class VideoBackupApp:
         return default_cfg
 
     def sync_fingerprint_settings_to_config(self):
-        """即時將【系統設定】分頁中已編輯的標籤、特徵指紋與排除清單同步至 self.config，確保即改即採納"""
+        """即時將【系統設定】分頁中已編輯的標籤與特徵指紋同步至 self.config，確保即改即採納"""
         if hasattr(self, 'entry_label_dashcam'):
             self.config["label_dashcam"] = self.entry_label_dashcam.get().strip()
             self.config["label_bodycam1"] = self.entry_label_b1.get().strip()
@@ -6010,8 +5994,6 @@ class VideoBackupApp:
             self.config["dashcam_fn_patterns"] = self.entry_dash_fn_patterns.get().strip()
         if hasattr(self, 'entry_body_keywords'):
             self.config["bodycam_keywords"] = self.entry_body_keywords.get().strip()
-        if hasattr(self, 'entry_excluded_disk_keywords'):
-            self.config["excluded_disk_keywords"] = self.entry_excluded_disk_keywords.get().strip()
         if hasattr(self, 'entry_time_buffer_minutes'):
             try:
                 self.config["time_buffer_minutes"] = int(self.entry_time_buffer_minutes.get().strip())
@@ -6020,7 +6002,7 @@ class VideoBackupApp:
 
     def save_config(self):
         try:
-            # 1. 從設定分頁抓取最新設定 (含車輛系統、勤務表路徑、設備硬碟標籤、特徵指紋與排除清單)
+            # 1. 從設定分頁抓取最新設定 (含車輛系統、勤務表路徑、設備硬碟標籤與特徵指紋)
             if hasattr(self, 'cb_car_system_url'):
                 self.config["car_system_url"] = self.cb_car_system_url.get().strip() or DEFAULT_CAR_SYSTEM_URL
             if hasattr(self, 'cb_car_chrome_profile'):
@@ -6405,15 +6387,7 @@ class VideoBackupApp:
         self.entry_body_keywords = ttk.Entry(f_fp3, width=42)
         self.entry_body_keywords.insert(0, self.config.get("bodycam_keywords", DEFAULT_BODYCAM_KEYWORDS))
         self.entry_body_keywords.pack(side="left", padx=4)
-        ttk.Label(f_fp3, text="例: DPB30, VIDEO, DCIM, 密錄器 (嚴格依此比對)", foreground="#666666", font=('Helvetica', 9)).pack(side="left", padx=2)
-
-        f_fp_excl = ttk.Frame(frame_fingerprint)
-        f_fp_excl.pack(fill="x", pady=2)
-        ttk.Label(f_fp_excl, text="排除常態硬碟關鍵字：", width=20).pack(side="left")
-        self.entry_excluded_disk_keywords = ttk.Entry(f_fp_excl, width=42)
-        self.entry_excluded_disk_keywords.insert(0, self.config.get("excluded_disk_keywords", DEFAULT_EXCLUDED_DISK_KEYWORDS))
-        self.entry_excluded_disk_keywords.pack(side="left", padx=4)
-        ttk.Label(f_fp_excl, text="例: TRANSCEND, RECOVERRX (忽略常駐外接備份硬碟)", foreground="#C62828", font=('Helvetica', 9)).pack(side="left", padx=2)
+        ttk.Label(f_fp3, text="例: DPB30, VIDEO, DCIM (嚴格依此比對)", foreground="#666666", font=('Helvetica', 9)).pack(side="left", padx=2)
 
         f_fp4 = ttk.Frame(frame_fingerprint)
         f_fp4.pack(fill="x", pady=2)
@@ -6515,7 +6489,7 @@ class VideoBackupApp:
         _bind_settings_wheel(parent)
 
     def reset_fingerprint_defaults(self):
-        """將智慧設備特徵指紋、排除清單與搜尋寬限期還原為官方預設值"""
+        """將智慧設備特徵指紋與搜尋寬限期還原為官方預設值"""
         if hasattr(self, 'entry_dash_keywords'):
             self.entry_dash_keywords.delete(0, tk.END)
             self.entry_dash_keywords.insert(0, DEFAULT_DASHCAM_KEYWORDS)
@@ -6525,13 +6499,10 @@ class VideoBackupApp:
         if hasattr(self, 'entry_body_keywords'):
             self.entry_body_keywords.delete(0, tk.END)
             self.entry_body_keywords.insert(0, DEFAULT_BODYCAM_KEYWORDS)
-        if hasattr(self, 'entry_excluded_disk_keywords'):
-            self.entry_excluded_disk_keywords.delete(0, tk.END)
-            self.entry_excluded_disk_keywords.insert(0, DEFAULT_EXCLUDED_DISK_KEYWORDS)
         if hasattr(self, 'entry_time_buffer_minutes'):
             self.entry_time_buffer_minutes.delete(0, tk.END)
             self.entry_time_buffer_minutes.insert(0, str(DEFAULT_TIME_BUFFER_MINUTES))
-        messagebox.showinfo("還原預設值", "已成功將設備特徵指紋、排除硬碟清單與時間寬限期還原為官方預設規則！\n請記得點擊「💾 儲存所有設定」使其生效。")
+        messagebox.showinfo("還原預設值", "已成功將設備特徵指紋與時間寬限期還原為官方預設規則！\n請記得點擊「💾 儲存所有設定」使其生效。")
 
     def find_car_profile_display(self, profile_key: str) -> str:
         """根據 Chrome 設定檔目錄名反查下拉選單顯示字串"""
