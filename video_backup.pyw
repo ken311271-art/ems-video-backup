@@ -2794,6 +2794,7 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_name1.set(init_name1)
         self.entry_name1.pack(side="left", padx=2)
         self.bind_officer_autocomplete(self.entry_name1)
+        self.btn_open_folder_b1 = ttk.Button(f_name1, text="📂 查看影片", command=lambda: self.open_device_video_folder(1))
 
         # 列 2: 密錄器 第二台 (狀態燈號移至前面與行車標齊，後接出勤同仁與預先開放換插核取方塊)
         f_name2 = ttk.Frame(frame_step2)
@@ -2807,6 +2808,7 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_name2.set(init_name2)
         self.entry_name2.pack(side="left", padx=2)
         self.bind_officer_autocomplete(self.entry_name2)
+        self.btn_open_folder_b2 = ttk.Button(f_name2, text="📂 查看影片", command=lambda: self.open_device_video_folder(2))
         self.var_preopen_b2 = tk.BooleanVar(value=False)
         self.chk_preopen_b2 = ttk.Checkbutton(f_name2, text="預先開放換插", variable=self.var_preopen_b2, command=self.on_toggle_preopen_b2)
         self.chk_preopen_b2.pack(side="left", padx=6)
@@ -2824,6 +2826,7 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_name3.set(init_name3)
         self.entry_name3.pack(side="left", padx=2)
         self.bind_officer_autocomplete(self.entry_name3)
+        self.btn_open_folder_b3 = ttk.Button(f_name3, text="📂 查看影片", command=lambda: self.open_device_video_folder(3))
         self.var_preopen_b3 = tk.BooleanVar(value=False)
         self.chk_preopen_b3 = ttk.Checkbutton(f_name3, text="預先開放換插", variable=self.var_preopen_b3, command=self.on_toggle_preopen_b3)
         self.chk_preopen_b3.pack(side="left", padx=6)
@@ -3212,6 +3215,72 @@ class ArchiveTaskTab(ttk.Frame):
         self.var_preopen_b3.set(not self.var_preopen_b3.get())
         self.on_toggle_preopen_b3()
 
+    def open_device_video_folder(self, slot_idx):
+        """【📂 查看影片】直接進入該密錄器影片所在資料夾並開啟，供同仁確認佩戴者"""
+        src_entry_map = {
+            1: getattr(self, 'entry_bodycam1_src', None),
+            2: getattr(self, 'entry_bodycam2_src', None),
+            3: getattr(self, 'entry_bodycam3_src', None),
+        }
+        slot_name_map = {1: "第一台", 2: "第二台", 3: "第三台"}
+        entry = src_entry_map.get(slot_idx)
+        slot_name = slot_name_map.get(slot_idx, "密錄器")
+
+        if not entry:
+            return
+
+        raw_path = entry.get().strip()
+        if not raw_path or not os.path.exists(raw_path):
+            messagebox.showwarning(
+                "設備未連線",
+                f"【密錄器：{slot_name}】目前尚未連線或隨身碟已被移除！\n\n請確認設備是否插好後再試。"
+            )
+            return
+
+        target_folder = self.get_device_video_directory(raw_path)
+        if target_folder and os.path.exists(target_folder):
+            self.log(f"📂 [開啟影片資料夾] 正在開啟【密錄器：{slot_name}】：{target_folder}")
+            open_folder_in_explorer(target_folder)
+        else:
+            self.log(f"📂 [開啟隨身碟根目錄] 正在開啟【密錄器：{slot_name}】：{raw_path}")
+            open_folder_in_explorer(raw_path)
+
+    def get_device_video_directory(self, device_path):
+        """智慧尋找密錄器隨身碟內實際存放影片之最深層資料夾"""
+        if not device_path or not os.path.exists(device_path):
+            return None
+
+        # 優先檢查常見密錄器影片目錄層級
+        candidates = [
+            os.path.join(device_path, "DCIM", "100MEDIA"),
+            os.path.join(device_path, "DCIM", "100DSCIM"),
+            os.path.join(device_path, "DCIM", "100VIDEO"),
+            os.path.join(device_path, "DCIM", "MOVIE"),
+            os.path.join(device_path, "DCIM"),
+            os.path.join(device_path, "VIDEO"),
+            os.path.join(device_path, "VIDEOS"),
+            os.path.join(device_path, "RECORD"),
+            os.path.join(device_path, "MOVIE"),
+            os.path.join(device_path, "NORMAL"),
+        ]
+        for c in candidates:
+            if os.path.exists(c) and os.path.isdir(c):
+                return c
+
+        # 若上述常見結構不存在，快速在 2 層目錄內搜尋含有影片檔之資料夾
+        try:
+            for root, dirs, files in os.walk(device_path):
+                rel = os.path.relpath(root, device_path)
+                depth = len(rel.split(os.sep)) if rel != "." else 0
+                if any(Path(f).suffix.lower() in VIDEO_EXTENSIONS for f in files):
+                    return root
+                if depth >= 2:
+                    dirs.clear()
+        except Exception:
+            pass
+
+        return device_path
+
     def update_swap_buttons_visibility(self):
         """動態更新第二台與第三台之預先開放換插核取方塊文字與顯示"""
         names = getattr(self, 'pending_roster_names', [])
@@ -3238,6 +3307,7 @@ class ArchiveTaskTab(ttk.Frame):
         1. 密錄器不限定死板硬體代號 (BODYCAM1/2/3)，依連線順序開啟反白！
         2. 連線 1 台 ➔ 開啟第一台；連線 2 台 ➔ 依序開啟第一、二台；連線 3 台 ➔ 全數開啟。
         3. 未連線之槽位：預設反灰關閉 (disabled)，由使用者透過「預先開放換插」核取方塊自主決定是否預先開！
+        4. 已連線之槽位：後方提供「📂 查看影片」按鈕，方便同仁一鍵開啟該設備影片資料夾確認佩戴同仁！
         """
         all_disks = get_all_connected_disks()
         label_dash = self.app.config.get("label_dashcam", "DASHCAM").strip()
@@ -3293,12 +3363,16 @@ class ArchiveTaskTab(ttk.Frame):
             _, msg1 = is_device_connected(p1, "")
             self.lbl_status_name1.config(text=f"🟢 {msg1}", foreground="#2E7D32")
             self.entry_name1.config(state="normal")
+            if hasattr(self, 'btn_open_folder_b1'):
+                self.btn_open_folder_b1.pack(side="left", padx=6)
         else:
             self.lbl_status_name1.config(text="⚪ 未連線", foreground="#888888")
             if str(self.entry_name1.cget("state")) != "normal":
                 self.entry_name1.config(state="normal")
             self.entry_name1.set("")
             self.entry_name1.config(state="disabled")
+            if hasattr(self, 'btn_open_folder_b1'):
+                self.btn_open_folder_b1.pack_forget()
 
         # 第二台
         if len(connected_bodycams) >= 2:
@@ -3312,8 +3386,12 @@ class ArchiveTaskTab(ttk.Frame):
             self.var_preopen_b2.set(False)
             if hasattr(self, 'chk_preopen_b2'):
                 self.chk_preopen_b2.pack_forget()
+            if hasattr(self, 'btn_open_folder_b2'):
+                self.btn_open_folder_b2.pack(side="left", padx=6)
         else:
-            # 第二台未連線：顯示勾選方塊，由使用者決定是否預先開
+            # 第二台未連線：隱藏查看資料夾，顯示勾選方塊由使用者決定是否預先開
+            if hasattr(self, 'btn_open_folder_b2'):
+                self.btn_open_folder_b2.pack_forget()
             if hasattr(self, 'chk_preopen_b2') and self.chk_preopen_b2.winfo_manager() != "pack":
                 self.chk_preopen_b2.pack(side="left", padx=6)
             if self.var_preopen_b2.get():
@@ -3340,8 +3418,15 @@ class ArchiveTaskTab(ttk.Frame):
             self.var_preopen_b3.set(False)
             if hasattr(self, 'chk_preopen_b3'):
                 self.chk_preopen_b3.pack_forget()
+            if hasattr(self, 'btn_open_folder_b3'):
+                if hasattr(self, 'lbl_hint_b3') and self.lbl_hint_b3.winfo_manager() == "pack":
+                    self.btn_open_folder_b3.pack(side="left", padx=6, before=self.lbl_hint_b3)
+                else:
+                    self.btn_open_folder_b3.pack(side="left", padx=6)
         else:
-            # 第三台未連線：顯示勾選方塊，由使用者決定是否預先開
+            # 第三台未連線：隱藏查看資料夾，顯示勾選方塊由使用者決定是否預先開
+            if hasattr(self, 'btn_open_folder_b3'):
+                self.btn_open_folder_b3.pack_forget()
             if hasattr(self, 'chk_preopen_b3') and self.chk_preopen_b3.winfo_manager() != "pack":
                 if hasattr(self, 'lbl_hint_b3') and self.lbl_hint_b3.winfo_manager() == "pack":
                     self.chk_preopen_b3.pack(side="left", padx=6, before=self.lbl_hint_b3)
