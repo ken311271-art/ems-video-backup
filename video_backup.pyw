@@ -2807,7 +2807,8 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_name2.set(init_name2)
         self.entry_name2.pack(side="left", padx=2)
         self.bind_officer_autocomplete(self.entry_name2)
-        self.btn_swap_b2 = ttk.Button(f_name2, text="", command=self.toggle_swap_b2)
+        self.btn_swap_b2 = ttk.Button(f_name2, text="➕ 換插第2位隊員", command=self.toggle_swap_b2)
+        self.btn_swap_b2.pack(side="left", padx=6)
 
         # 列 3: 密錄器 3 (狀態燈號移至前面與行車標齊，後接出勤同仁與動態換插按鈕)
         f_name3 = ttk.Frame(frame_step2)
@@ -2821,12 +2822,12 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_name3.set(init_name3)
         self.entry_name3.pack(side="left", padx=2)
         self.bind_officer_autocomplete(self.entry_name3)
-        self.btn_swap_b3 = ttk.Button(f_name3, text="", command=self.toggle_swap_b3)
+        self.btn_swap_b3 = ttk.Button(f_name3, text="➕ 換插第3位隊員", command=self.toggle_swap_b3)
+        self.btn_swap_b3.pack(side="left", padx=6)
+        self.lbl_hint_b3 = ttk.Label(f_name3, text="↳ (3人出勤換插；電腦3孔，任一設備完成後自動提示換插)", foreground="#007ACC", font=('Helvetica', 9))
+        self.lbl_hint_b3.pack(side="left", padx=2)
 
-        ttk.Button(f_name3, text="🧹 清空全體人員", command=self.clear_all_officers, width=13).pack(side="left", padx=6)
-        ttk.Label(f_name3, text="↳ (3人出勤時填寫；電腦3孔，任一設備完成後自動提示換插)", foreground="#007ACC", font=('Helvetica', 9)).pack(side="left", padx=2)
-
-        # 列 4: 姓名快速對調區 (含 1⇄2、2⇄3、1⇄3、1➔2➔3 輪替 及 一鍵清空全體姓名)
+        # 列 4: 姓名快速對調區 (含 1⇄2、2⇄3、1⇄3、1➔2➔3 輪替)
         f_swap_line = ttk.Frame(frame_step2)
         f_swap_line.pack(fill="x", pady=(3, 2))
         ttk.Label(f_swap_line, text="姓名快速對調：", width=14).pack(side="left")
@@ -2834,8 +2835,7 @@ class ArchiveTaskTab(ttk.Frame):
         ttk.Button(f_swap_line, text="⇅ 2 ⇄ 3 號", command=self.swap_2_3, width=10).pack(side="left", padx=2)
         ttk.Button(f_swap_line, text="⇅ 1 ⇄ 3 號", command=self.swap_1_3, width=10).pack(side="left", padx=2)
         ttk.Button(f_swap_line, text="🔄 1➔2➔3 輪替", command=self.rotate_names, width=13).pack(side="left", padx=2)
-        ttk.Button(f_swap_line, text="🧹 清空全體姓名", command=self.clear_all_officers, width=13).pack(side="left", padx=2)
-        ttk.Label(f_swap_line, text="↳ (單鍵互換、輪替順移或一鍵清空)", foreground="#666666", font=('Helvetica', 9)).pack(side="left", padx=2)
+        ttk.Label(f_swap_line, text="↳ (單鍵互換或輪替順移)", foreground="#666666", font=('Helvetica', 9)).pack(side="left", padx=2)
 
         # 3. 步驟 ❸：開始比對並自動複製 (移至路徑設定上方)
         frame_step3 = ttk.LabelFrame(self.content_frame, text="【步驟 ❸：開始比對並自動複製】", padding=6)
@@ -3157,7 +3157,7 @@ class ArchiveTaskTab(ttk.Frame):
             if target_name:
                 self.entry_name2.set(target_name)
             self.lbl_status_name2.config(text="⏳ 待換插", foreground="#E65100")
-            self.btn_swap_b2.config(text="↩️ 取消換插")
+            self.update_swap_buttons_visibility()
             curr_val = self.entry_name2.get().strip()
             self.log(f"⏳ [預約換插] 密錄器 2 已設定為接續換插設備 (出勤同仁: {curr_val or '待選'})。")
             self.update_status(f"狀態：密錄器 2 已預約換插【{curr_val or '接續同仁'}】", "#E65100")
@@ -3168,8 +3168,7 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_name2.set("")
             self.entry_name2.config(state="disabled")
             self.lbl_status_name2.config(text="⚪ 未連線", foreground="#888888")
-            btn_txt = f"➕ 換插第2位 ({target_name})" if target_name else "➕ 換插此設備"
-            self.btn_swap_b2.config(text=btn_txt)
+            self.update_swap_buttons_visibility()
             self.log("ℹ️ [取消換插] 密錄器 2 已取消預約換插，恢復反灰關閉。")
             self.update_status("狀態：密錄器 2 已取消換插", "#555555")
 
@@ -3196,7 +3195,7 @@ class ArchiveTaskTab(ttk.Frame):
             if target_name:
                 self.entry_name3.set(target_name)
             self.lbl_status_name3.config(text="⏳ 待換插", foreground="#E65100")
-            self.btn_swap_b3.config(text="↩️ 取消換插")
+            self.update_swap_buttons_visibility()
             curr_val = self.entry_name3.get().strip()
             self.log(f"⏳ [預約換插] 密錄器 3 已設定為接續換插設備 (出勤同仁: {curr_val or '待選'})。")
             self.update_status(f"狀態：密錄器 3 已預約換插【{curr_val or '接續同仁'}】", "#E65100")
@@ -3207,30 +3206,29 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_name3.set("")
             self.entry_name3.config(state="disabled")
             self.lbl_status_name3.config(text="⚪ 未連線", foreground="#888888")
-            btn_txt = f"➕ 換插第3位 ({target_name})" if target_name else "➕ 換插此設備"
-            self.btn_swap_b3.config(text=btn_txt)
+            self.update_swap_buttons_visibility()
             self.log("ℹ️ [取消換插] 密錄器 3 已取消預約換插，恢復反灰關閉。")
             self.update_status("狀態：密錄器 3 已取消換插", "#555555")
 
     def update_swap_buttons_visibility(self):
         """動態更新密錄器 2 與 密錄器 3 之換插按鈕顯示與文字
-        精準規則：按鈕僅動態出現在「緊接著第一個未連線的槽位」！
-        • 若現場連線 1 台、排班 2 人以上 ➔ 密錄器 2 顯示 [➕ 換插第2位 (隊員B)]
-        • 若現場連線 2 台、排班 3 人以上 ➔ 密錄器 3 顯示 [➕ 換插第3位 (隊員C)]
-        • 若設備已連線或無需換插 ➔ 自動隱藏按鈕，版面最乾淨
+        規則：
+        • 設備若實際連線 (🟢 綠燈)：已在電腦連線直接複製，無需換插，自動隱藏換插按鈕。
+        • 設備若未連線 (⚪ 白燈)：常態顯示換插按鈕！
+          - 若處於預約換插狀態：顯示 [↩️ 取消換插]
+          - 若未預約換插：
+            如有排班同仁姓名，顯示 [➕ 換插第X位 (姓名)]
+            若無排班姓名或尚未選擇時段，顯示 [➕ 換插第X位隊員]
         """
         if not hasattr(self, 'btn_swap_b2') or not hasattr(self, 'btn_swap_b3'):
             return
 
-        curr_b1 = self.entry_bodycam1_src.get().strip() if hasattr(self, 'entry_bodycam1_src') else ""
         curr_b2 = self.entry_bodycam2_src.get().strip() if hasattr(self, 'entry_bodycam2_src') else ""
         curr_b3 = self.entry_bodycam3_src.get().strip() if hasattr(self, 'entry_bodycam3_src') else ""
 
-        label_b1 = self.app.config.get("label_bodycam1", "BODYCAM1").strip()
         label_b2 = self.app.config.get("label_bodycam2", "BODYCAM2").strip()
         label_b3 = self.app.config.get("label_bodycam3", "BODYCAM3").strip()
 
-        is_b1, _ = is_device_connected(curr_b1, label_b1)
         is_b2, _ = is_device_connected(curr_b2, label_b2)
         is_b3, _ = is_device_connected(curr_b3, label_b3)
 
@@ -3239,41 +3237,35 @@ class ArchiveTaskTab(ttk.Frame):
         # 1. 密錄器 2 按鈕控制
         if is_b2:
             self.btn_swap_b2.pack_forget()
-        elif is_b1 and not is_b2:
+        else:
             if getattr(self, 'is_swap_reserved_b2', False):
                 self.btn_swap_b2.config(text="↩️ 取消換插")
-                self.btn_swap_b2.pack(side="left", padx=6)
-            elif len(names) >= 2:
-                self.btn_swap_b2.config(text=f"➕ 換插第2位 ({names[1]})")
-                self.btn_swap_b2.pack(side="left", padx=6)
             else:
-                self.btn_swap_b2.pack_forget()
-        else:
-            if not getattr(self, 'is_swap_reserved_b2', False):
-                self.btn_swap_b2.pack_forget()
+                if len(names) >= 2 and names[1]:
+                    self.btn_swap_b2.config(text=f"➕ 換插第2位 ({names[1]})")
+                else:
+                    self.btn_swap_b2.config(text="➕ 換插第2位隊員")
+            if self.btn_swap_b2.winfo_manager() != "pack":
+                self.btn_swap_b2.pack(side="left", padx=6)
 
         # 2. 密錄器 3 按鈕控制
         if is_b3:
             self.btn_swap_b3.pack_forget()
-        elif is_b1 and is_b2 and not is_b3:
-            if getattr(self, 'is_swap_reserved_b3', False):
-                self.btn_swap_b3.config(text="↩️ 取消換插")
-                self.btn_swap_b3.pack(side="left", padx=6)
-            elif len(names) >= 3:
-                self.btn_swap_b3.config(text=f"➕ 換插第3位 ({names[2]})")
-                self.btn_swap_b3.pack(side="left", padx=6)
-            else:
-                self.btn_swap_b3.pack_forget()
-        elif getattr(self, 'is_swap_reserved_b2', False) and len(names) >= 3 and not is_b3:
-            if getattr(self, 'is_swap_reserved_b3', False):
-                self.btn_swap_b3.config(text="↩️ 取消換插")
-                self.btn_swap_b3.pack(side="left", padx=6)
-            else:
-                self.btn_swap_b3.config(text=f"➕ 換插第3位 ({names[2]})")
-                self.btn_swap_b3.pack(side="left", padx=6)
         else:
-            if not getattr(self, 'is_swap_reserved_b3', False):
-                self.btn_swap_b3.pack_forget()
+            if getattr(self, 'is_swap_reserved_b3', False):
+                self.btn_swap_b3.config(text="↩️ 取消換插")
+            else:
+                if len(names) >= 3 and names[2]:
+                    self.btn_swap_b3.config(text=f"➕ 換插第3位 ({names[2]})")
+                elif len(names) == 2 and not getattr(self, 'is_swap_reserved_b2', False) and names[1]:
+                    self.btn_swap_b3.config(text=f"➕ 換插第3位 ({names[1]})")
+                else:
+                    self.btn_swap_b3.config(text="➕ 換插第3位隊員")
+            if self.btn_swap_b3.winfo_manager() != "pack":
+                if hasattr(self, 'lbl_hint_b3') and self.lbl_hint_b3.winfo_manager() == "pack":
+                    self.btn_swap_b3.pack(side="left", padx=6, before=self.lbl_hint_b3)
+                else:
+                    self.btn_swap_b3.pack(side="left", padx=6)
 
     def refresh_device_connections(self, show_toast=False):
         """【出勤設備連線狀態刷新 ＆ 動態反灰防呆】
@@ -3361,6 +3353,9 @@ class ArchiveTaskTab(ttk.Frame):
                 self.entry_name3.config(state="normal")
             self.entry_name3.set("")
             self.entry_name3.config(state="disabled")
+
+        # 5. 更新換插按鈕顯示與文字
+        self.update_swap_buttons_visibility()
 
         if show_toast:
             dash_txt = self.lbl_status_dashcam.cget("text") if hasattr(self, 'lbl_status_dashcam') else ""
@@ -3755,10 +3750,6 @@ class ArchiveTaskTab(ttk.Frame):
                     entry.config(state="disabled")
                 else:
                     entry.set("")
-        if hasattr(self, 'btn_swap_b2'):
-            self.btn_swap_b2.pack_forget()
-        if hasattr(self, 'btn_swap_b3'):
-            self.btn_swap_b3.pack_forget()
         self.refresh_device_connections(show_toast=False)
         self.log("🧹 [清空人員] 已全數清空密錄器 1、2、3 之出勤同仁姓名與換插預約。")
         self.update_status("狀態：已清空全體出勤同仁姓名", "#555555")
