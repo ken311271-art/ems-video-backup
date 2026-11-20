@@ -2720,6 +2720,11 @@ class ArchiveTaskTab(ttk.Frame):
         )
         self.lbl_note.pack(side="left")
 
+        # 換插預約與排班暫存變數
+        self.is_swap_reserved_b2 = False
+        self.is_swap_reserved_b3 = False
+        self.pending_roster_names = []
+
         # 需求 2: 軟體啟動時先依據前一個任務的紀錄帶入同仁姓名
         # 若已有其他分頁（例如點擊 [ ➕ ] 新增），則優先繼承前一個分頁的同仁
         init_name1 = ""
@@ -2790,7 +2795,7 @@ class ArchiveTaskTab(ttk.Frame):
         self.entry_name1.pack(side="left", padx=2)
         self.bind_officer_autocomplete(self.entry_name1)
 
-        # 列 2: 密錄器 2 (狀態燈號移至前面與行車標齊，後接出勤同仁)
+        # 列 2: 密錄器 2 (狀態燈號移至前面與行車標齊，後接出勤同仁與動態換插按鈕)
         f_name2 = ttk.Frame(frame_step2)
         f_name2.pack(fill="x", pady=2)
         ttk.Label(f_name2, text="密錄器 2：", width=14).pack(side="left")
@@ -2802,8 +2807,9 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_name2.set(init_name2)
         self.entry_name2.pack(side="left", padx=2)
         self.bind_officer_autocomplete(self.entry_name2)
+        self.btn_swap_b2 = ttk.Button(f_name2, text="", command=self.toggle_swap_b2)
 
-        # 列 3: 密錄器 3 (狀態燈號移至前面與行車標齊，後接出勤同仁)
+        # 列 3: 密錄器 3 (狀態燈號移至前面與行車標齊，後接出勤同仁與動態換插按鈕)
         f_name3 = ttk.Frame(frame_step2)
         f_name3.pack(fill="x", pady=2)
         ttk.Label(f_name3, text="密錄器 3：", width=14).pack(side="left")
@@ -2815,6 +2821,7 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_name3.set(init_name3)
         self.entry_name3.pack(side="left", padx=2)
         self.bind_officer_autocomplete(self.entry_name3)
+        self.btn_swap_b3 = ttk.Button(f_name3, text="", command=self.toggle_swap_b3)
 
         ttk.Button(f_name3, text="🧹 清空全體人員", command=self.clear_all_officers, width=13).pack(side="left", padx=6)
         ttk.Label(f_name3, text="↳ (3人出勤時填寫；電腦3孔，任一設備完成後自動提示換插)", foreground="#007ACC", font=('Helvetica', 9)).pack(side="left", padx=2)
@@ -3129,13 +3136,151 @@ class ArchiveTaskTab(ttk.Frame):
 
     def toggle_manual_unlock3(self):
         """相容舊版手動解鎖按鈕呼叫"""
-        self.refresh_device_connections()
+        self.toggle_swap_b3()
+
+    def toggle_swap_b2(self):
+        """【一鍵換插/取消】密錄器 2 預約換插切換"""
+        curr_b2 = self.entry_bodycam2_src.get().strip() if hasattr(self, 'entry_bodycam2_src') else ""
+        label_b2 = self.app.config.get("label_bodycam2", "BODYCAM2").strip()
+        is_b2, _ = is_device_connected(curr_b2, label_b2)
+        if is_b2:
+            messagebox.showinfo("設備已連線", "密錄器 2 目前已在電腦連線中，將在第一批直接複製，無需換插！")
+            return
+
+        names = getattr(self, 'pending_roster_names', [])
+        target_name = names[1] if len(names) >= 2 else ""
+
+        if not getattr(self, 'is_swap_reserved_b2', False):
+            # 啟用換插
+            self.is_swap_reserved_b2 = True
+            self.entry_name2.config(state="normal")
+            if target_name:
+                self.entry_name2.set(target_name)
+            self.lbl_status_name2.config(text="⏳ 待換插", foreground="#E65100")
+            self.btn_swap_b2.config(text="↩️ 取消換插")
+            curr_val = self.entry_name2.get().strip()
+            self.log(f"⏳ [預約換插] 密錄器 2 已設定為接續換插設備 (出勤同仁: {curr_val or '待選'})。")
+            self.update_status(f"狀態：密錄器 2 已預約換插【{curr_val or '接續同仁'}】", "#E65100")
+        else:
+            # 取消換插
+            self.is_swap_reserved_b2 = False
+            self.entry_name2.config(state="normal")
+            self.entry_name2.set("")
+            self.entry_name2.config(state="disabled")
+            self.lbl_status_name2.config(text="⚪ 未連線", foreground="#888888")
+            btn_txt = f"➕ 換插第2位 ({target_name})" if target_name else "➕ 換插此設備"
+            self.btn_swap_b2.config(text=btn_txt)
+            self.log("ℹ️ [取消換插] 密錄器 2 已取消預約換插，恢復反灰關閉。")
+            self.update_status("狀態：密錄器 2 已取消換插", "#555555")
+
+    def toggle_swap_b3(self):
+        """【一鍵換插/取消】密錄器 3 預約換插切換"""
+        curr_b3 = self.entry_bodycam3_src.get().strip() if hasattr(self, 'entry_bodycam3_src') else ""
+        label_b3 = self.app.config.get("label_bodycam3", "BODYCAM3").strip()
+        is_b3, _ = is_device_connected(curr_b3, label_b3)
+        if is_b3:
+            messagebox.showinfo("設備已連線", "密錄器 3 目前已在電腦連線中，將在第一批直接複製，無需換插！")
+            return
+
+        names = getattr(self, 'pending_roster_names', [])
+        target_name = ""
+        if len(names) >= 3:
+            target_name = names[2]
+        elif len(names) == 2 and not getattr(self, 'is_swap_reserved_b2', False):
+            target_name = names[1]
+
+        if not getattr(self, 'is_swap_reserved_b3', False):
+            # 啟用換插
+            self.is_swap_reserved_b3 = True
+            self.entry_name3.config(state="normal")
+            if target_name:
+                self.entry_name3.set(target_name)
+            self.lbl_status_name3.config(text="⏳ 待換插", foreground="#E65100")
+            self.btn_swap_b3.config(text="↩️ 取消換插")
+            curr_val = self.entry_name3.get().strip()
+            self.log(f"⏳ [預約換插] 密錄器 3 已設定為接續換插設備 (出勤同仁: {curr_val or '待選'})。")
+            self.update_status(f"狀態：密錄器 3 已預約換插【{curr_val or '接續同仁'}】", "#E65100")
+        else:
+            # 取消換插
+            self.is_swap_reserved_b3 = False
+            self.entry_name3.config(state="normal")
+            self.entry_name3.set("")
+            self.entry_name3.config(state="disabled")
+            self.lbl_status_name3.config(text="⚪ 未連線", foreground="#888888")
+            btn_txt = f"➕ 換插第3位 ({target_name})" if target_name else "➕ 換插此設備"
+            self.btn_swap_b3.config(text=btn_txt)
+            self.log("ℹ️ [取消換插] 密錄器 3 已取消預約換插，恢復反灰關閉。")
+            self.update_status("狀態：密錄器 3 已取消換插", "#555555")
+
+    def update_swap_buttons_visibility(self):
+        """動態更新密錄器 2 與 密錄器 3 之換插按鈕顯示與文字
+        精準規則：按鈕僅動態出現在「緊接著第一個未連線的槽位」！
+        • 若現場連線 1 台、排班 2 人以上 ➔ 密錄器 2 顯示 [➕ 換插第2位 (隊員B)]
+        • 若現場連線 2 台、排班 3 人以上 ➔ 密錄器 3 顯示 [➕ 換插第3位 (隊員C)]
+        • 若設備已連線或無需換插 ➔ 自動隱藏按鈕，版面最乾淨
+        """
+        if not hasattr(self, 'btn_swap_b2') or not hasattr(self, 'btn_swap_b3'):
+            return
+
+        curr_b1 = self.entry_bodycam1_src.get().strip() if hasattr(self, 'entry_bodycam1_src') else ""
+        curr_b2 = self.entry_bodycam2_src.get().strip() if hasattr(self, 'entry_bodycam2_src') else ""
+        curr_b3 = self.entry_bodycam3_src.get().strip() if hasattr(self, 'entry_bodycam3_src') else ""
+
+        label_b1 = self.app.config.get("label_bodycam1", "BODYCAM1").strip()
+        label_b2 = self.app.config.get("label_bodycam2", "BODYCAM2").strip()
+        label_b3 = self.app.config.get("label_bodycam3", "BODYCAM3").strip()
+
+        is_b1, _ = is_device_connected(curr_b1, label_b1)
+        is_b2, _ = is_device_connected(curr_b2, label_b2)
+        is_b3, _ = is_device_connected(curr_b3, label_b3)
+
+        names = getattr(self, 'pending_roster_names', [])
+
+        # 1. 密錄器 2 按鈕控制
+        if is_b2:
+            self.btn_swap_b2.pack_forget()
+        elif is_b1 and not is_b2:
+            if getattr(self, 'is_swap_reserved_b2', False):
+                self.btn_swap_b2.config(text="↩️ 取消換插")
+                self.btn_swap_b2.pack(side="left", padx=6)
+            elif len(names) >= 2:
+                self.btn_swap_b2.config(text=f"➕ 換插第2位 ({names[1]})")
+                self.btn_swap_b2.pack(side="left", padx=6)
+            else:
+                self.btn_swap_b2.pack_forget()
+        else:
+            if not getattr(self, 'is_swap_reserved_b2', False):
+                self.btn_swap_b2.pack_forget()
+
+        # 2. 密錄器 3 按鈕控制
+        if is_b3:
+            self.btn_swap_b3.pack_forget()
+        elif is_b1 and is_b2 and not is_b3:
+            if getattr(self, 'is_swap_reserved_b3', False):
+                self.btn_swap_b3.config(text="↩️ 取消換插")
+                self.btn_swap_b3.pack(side="left", padx=6)
+            elif len(names) >= 3:
+                self.btn_swap_b3.config(text=f"➕ 換插第3位 ({names[2]})")
+                self.btn_swap_b3.pack(side="left", padx=6)
+            else:
+                self.btn_swap_b3.pack_forget()
+        elif getattr(self, 'is_swap_reserved_b2', False) and len(names) >= 3 and not is_b3:
+            if getattr(self, 'is_swap_reserved_b3', False):
+                self.btn_swap_b3.config(text="↩️ 取消換插")
+                self.btn_swap_b3.pack(side="left", padx=6)
+            else:
+                self.btn_swap_b3.config(text=f"➕ 換插第3位 ({names[2]})")
+                self.btn_swap_b3.pack(side="left", padx=6)
+        else:
+            if not getattr(self, 'is_swap_reserved_b3', False):
+                self.btn_swap_b3.pack_forget()
 
     def refresh_device_connections(self, show_toast=False):
         """【出勤設備連線狀態刷新 ＆ 動態反灰防呆】
         先偵測哪一個設備有插進去：
         • 有連線之設備：開放輸入欄位（state="normal"，白色底色，可選取或修改姓名）。
         • 沒連線之設備：直接關閉反灰（state="disabled"，禁止點選，並清空文字）。
+        • 若處於預約換插狀態（is_swap_reserved_bX）：保持開放與 ⏳ 待換插 燈號。
         """
         label_dash = self.app.config.get("label_dashcam", "DASHCAM").strip()
         label_b1 = self.app.config.get("label_bodycam1", "BODYCAM1").strip()
@@ -3176,7 +3321,13 @@ class ArchiveTaskTab(ttk.Frame):
         # 2. 密錄器 2 驗證與開放/反灰控制
         is_b2, msg_b2 = is_device_connected(curr_b2, label_b2)
         if is_b2:
+            self.is_swap_reserved_b2 = False
             self.lbl_status_name2.config(text=f"🟢 {msg_b2}", foreground="#2E7D32")
+            self.entry_name2.config(state="normal")
+            if hasattr(self, 'btn_swap_b2'):
+                self.btn_swap_b2.pack_forget()
+        elif getattr(self, 'is_swap_reserved_b2', False):
+            self.lbl_status_name2.config(text="⏳ 待換插", foreground="#E65100")
             self.entry_name2.config(state="normal")
         else:
             self.lbl_status_name2.config(text="⚪ 未連線", foreground="#888888")
@@ -3196,7 +3347,13 @@ class ArchiveTaskTab(ttk.Frame):
         # 4. 密錄器 3 驗證與開放/反灰控制
         is_b3, msg_b3 = is_device_connected(curr_b3, label_b3)
         if is_b3:
+            self.is_swap_reserved_b3 = False
             self.lbl_status_name3.config(text=f"🟢 {msg_b3}", foreground="#2E7D32")
+            self.entry_name3.config(state="normal")
+            if hasattr(self, 'btn_swap_b3'):
+                self.btn_swap_b3.pack_forget()
+        elif getattr(self, 'is_swap_reserved_b3', False):
+            self.lbl_status_name3.config(text="⏳ 待換插", foreground="#E65100")
             self.entry_name3.config(state="normal")
         else:
             self.lbl_status_name3.config(text="⚪ 未連線", foreground="#888888")
@@ -3585,7 +3742,10 @@ class ArchiveTaskTab(ttk.Frame):
                 self.update_status("狀態：未找到外接攝影設備隨身碟，請確認插槽", "#C62828")
 
     def clear_all_officers(self):
-        """【🧹 清空全體人員】將密錄器 1、2、3 之出勤同仁姓名全數清空"""
+        """【🧹 清空全體人員】將密錄器 1、2、3 之出勤同仁姓名全數清空並重設換插預約"""
+        self.is_swap_reserved_b2 = False
+        self.is_swap_reserved_b3 = False
+        self.pending_roster_names = []
         for entry in (getattr(self, 'entry_name1', None), getattr(self, 'entry_name2', None), getattr(self, 'entry_name3', None)):
             if entry:
                 st = str(entry.cget("state"))
@@ -3595,7 +3755,12 @@ class ArchiveTaskTab(ttk.Frame):
                     entry.config(state="disabled")
                 else:
                     entry.set("")
-        self.log("🧹 [清空人員] 已全數清空密錄器 1、2、3 之出勤同仁姓名。")
+        if hasattr(self, 'btn_swap_b2'):
+            self.btn_swap_b2.pack_forget()
+        if hasattr(self, 'btn_swap_b3'):
+            self.btn_swap_b3.pack_forget()
+        self.refresh_device_connections(show_toast=False)
+        self.log("🧹 [清空人員] 已全數清空密錄器 1、2、3 之出勤同仁姓名與換插預約。")
         self.update_status("狀態：已清空全體出勤同仁姓名", "#555555")
 
     def smart_detect_and_sync_roster(self):
@@ -3813,6 +3978,11 @@ class ArchiveTaskTab(ttk.Frame):
             messagebox.showinfo("無對應同仁", f"勤務表欄位 {cell_ref} 內容為【{cell_val}】，但無法比對出對應同仁。")
             return
 
+        # 暫存最新排班人員名單，重置換插預約
+        self.pending_roster_names = list(names)
+        self.is_swap_reserved_b2 = False
+        self.is_swap_reserved_b3 = False
+
         # 1. 先刷新設備連線，確保取得各密錄器最新連線與開放狀態
         # 嚴格遵循：看使用者插入哪幾個密錄器，才開放有連線的密錄器；未連線者直接關閉（反灰）不給點選
         self.refresh_device_connections(show_toast=False)
@@ -3846,8 +4016,12 @@ class ArchiveTaskTab(ttk.Frame):
             else:
                 entry.set("")
 
+        # 4. 動態更新換插按鈕顯示（僅在下一個未連線槽位顯示按鈕）
+        self.update_swap_buttons_visibility()
+
         prev_label = f" (前一日 {duty_month:02d}/{duty_day:02d} 凌晨勤務)" if is_prev else ""
         if len(names) > len(open_slots):
+            unassigned_name = names[len(open_slots)]
             log_msg = (
                 f"⚡ 成功自勤務表【{file_name}】取得 {len(names)} 位排班同仁（{'、'.join(names)}），"
                 f"因目前電腦僅連線 {len(open_slots)} 部密錄器，已依序填入已連線之設備：{'、'.join(assigned_records)} (時段 [{time_slot_str}]{prev_label})"
@@ -3861,8 +4035,9 @@ class ArchiveTaskTab(ttk.Frame):
 
         if hasattr(self, 'lbl_roster_hint'):
             hint_clean = "、".join([r.replace("密錄器 ", "").replace("【", "").replace("】", "") for r in assigned_records])
+            more_hint = f" (尚有【{names[len(open_slots)]}】若需換插請點換插按鈕)" if len(names) > len(open_slots) else ""
             self.lbl_roster_hint.config(
-                text=f"✅ 已帶入 {time_slot_str}{prev_label}：{hint_clean}",
+                text=f"✅ 已帶入 {time_slot_str}{prev_label}：{hint_clean}{more_hint}",
                 foreground="#2E7D32"
             )
 
@@ -4005,11 +4180,13 @@ class ArchiveTaskTab(ttk.Frame):
         b3_conn, b3_msg = is_device_connected(bodycam3_src, label_b3)
 
         req_dash = bool(dashcam_src)
-        # 密錄器需求判定：僅在該設備實際連線中，或同仁姓名欄位有填寫（開放狀態）時才納入任務
-        # 徹底杜絕因舊路徑殘留導致未插設備誤報「未連線」之痛點
+        # 密錄器需求判定：
+        # 1. 實際連線中 (bX_conn)
+        # 2. 處於預約換插狀態且有填寫同仁姓名 (is_swap_reserved_bX and nameX)
+        # 若現場實際只有 1 台錄、只帶 1 台、或未點擊換插，完全排除後續槽位，直接複製結案！
         req_b1 = bool(name1 or b1_conn)
-        req_b2 = bool(name2 or b2_conn)
-        req_b3 = bool(name3 or b3_conn)
+        req_b2 = bool(b2_conn or (getattr(self, 'is_swap_reserved_b2', False) and name2))
+        req_b3 = bool(b3_conn or (getattr(self, 'is_swap_reserved_b3', False) and name3))
 
         needed_devices = []
         if req_dash:
@@ -4025,21 +4202,22 @@ class ArchiveTaskTab(ttk.Frame):
         connected_count = sum(1 for dev in needed_devices if dev[3])
         total_needed = len(needed_devices)
 
+        # 找出哪些設備是待換插的 (Phase 2)
+        swap_dev_types = set()
+        if getattr(self, 'is_swap_reserved_b2', False) and not b2_conn:
+            swap_dev_types.add("bodycam2")
+        if getattr(self, 'is_swap_reserved_b3', False) and not b3_conn:
+            swap_dev_types.add("bodycam3")
         # 若需要複製 4 台設備，但電腦僅 3 孔：
-        # 自動找出未連線的設備排入「待換插設備 (Phase 2)」
-        # （同仁可能先插 3 台密錄器，或先插行車+2台密錄器，只要未插的那台就排入待換插）
-        swap_dev_type = None
         if total_needed > 3 and connected_count <= 3:
             for dev in needed_devices:
                 if not dev[3]:  # 未連線
-                    swap_dev_type = dev[0]
+                    swap_dev_types.add(dev[0])
                     break
-            if not swap_dev_type:
-                swap_dev_type = "bodycam3"
 
         precheck_results = []
         for dev_type, dev_label, dev_src, is_conn, conn_msg, off_name in needed_devices:
-            if dev_type == swap_dev_type and (not is_conn or total_needed > 3):
+            if dev_type in swap_dev_types and not is_conn:
                 precheck_results.append({
                     "type": dev_type,
                     "label": dev_label,
@@ -4048,7 +4226,7 @@ class ArchiveTaskTab(ttk.Frame):
                     "is_swap_phase2": True,
                     "files": [],
                     "name": off_name,
-                    "status_desc": "⏳ 待換插 (電腦 3 孔限制) — 任一設備完成後自動提示插上"
+                    "status_desc": "⏳ 待換插 (預約續傳) — 任一設備完成後自動提示插上"
                 })
             else:
                 files = self.find_videos_in_range(dev_src, start_dt, end_dt) if is_conn else []
@@ -4220,7 +4398,14 @@ class ArchiveTaskTab(ttk.Frame):
         swap_confirmed = [False]
         scanned_files = []
 
-        dev_title = f"密錄器 3 ({target_name})" if (target_dev_type == "bodycam3" and target_name) else ("密錄器 3" if target_dev_type == "bodycam3" else ("行車紀錄器" if target_dev_type == "dashcam" else target_name or "待換插設備"))
+        dev_name_map = {
+            "dashcam": "行車紀錄器",
+            "bodycam1": "密錄器 1",
+            "bodycam2": "密錄器 2",
+            "bodycam3": "密錄器 3"
+        }
+        base_name = dev_name_map.get(target_dev_type, "待換插設備")
+        dev_title = f"{base_name} ({target_name})" if target_name else base_name
         done_text = completed_dev_names if completed_dev_names else "已有設備"
 
         def show_dialog():
