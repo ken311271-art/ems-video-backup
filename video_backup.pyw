@@ -4002,9 +4002,11 @@ class ArchiveTaskTab(ttk.Frame):
         b3_conn, b3_msg = is_device_connected(bodycam3_src, label_b3)
 
         req_dash = bool(dashcam_src)
-        req_b1 = bool(name1 or bodycam1_src)
-        req_b2 = bool(name2 or bodycam2_src)
-        req_b3 = bool(name3)  # 密錄器 3 僅在使用者有輸入人名時才視為需執行之任務
+        # 密錄器需求判定：僅在該設備實際連線中，或同仁姓名欄位有填寫（開放狀態）時才納入任務
+        # 徹底杜絕因舊路徑殘留導致未插設備誤報「未連線」之痛點
+        req_b1 = bool(name1 or b1_conn)
+        req_b2 = bool(name2 or b2_conn)
+        req_b3 = bool(name3 or b3_conn)
 
         needed_devices = []
         if req_dash:
@@ -4014,7 +4016,7 @@ class ArchiveTaskTab(ttk.Frame):
         if req_b2:
             needed_devices.append(("bodycam2", f"📹 密錄器 2 ({name2 if name2 else '未填姓名'})", bodycam2_src, b2_conn, b2_msg, name2))
         if req_b3:
-            needed_devices.append(("bodycam3", f"📹 密錄器 3 ({name3})", bodycam3_src, b3_conn, b3_msg, name3))
+            needed_devices.append(("bodycam3", f"📹 密錄器 3 ({name3 if name3 else '未填姓名'})", bodycam3_src, b3_conn, b3_msg, name3))
 
         # 計算已連線設備數量
         connected_count = sum(1 for dev in needed_devices if dev[3])
