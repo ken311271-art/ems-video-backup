@@ -2794,7 +2794,7 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_name1.set(init_name1)
         self.entry_name1.pack(side="left", padx=2)
         self.bind_officer_autocomplete(self.entry_name1)
-        self.btn_open_folder_b1 = ttk.Button(f_name1, text="📂 查看人員", command=lambda: self.open_device_video_folder(1))
+        self.btn_open_folder_b1 = ttk.Button(f_name1, text="👤 查看人員", command=lambda: self.open_device_video_folder(1))
 
         # 列 2: 密錄器 第二台 (狀態燈號移至前面與行車標齊，後接出勤同仁與預先開放換插核取方塊)
         f_name2 = ttk.Frame(frame_step2)
@@ -2808,7 +2808,7 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_name2.set(init_name2)
         self.entry_name2.pack(side="left", padx=2)
         self.bind_officer_autocomplete(self.entry_name2)
-        self.btn_open_folder_b2 = ttk.Button(f_name2, text="📂 查看人員", command=lambda: self.open_device_video_folder(2))
+        self.btn_open_folder_b2 = ttk.Button(f_name2, text="👤 查看人員", command=lambda: self.open_device_video_folder(2))
         self.var_preopen_b2 = tk.BooleanVar(value=False)
         self.chk_preopen_b2 = ttk.Checkbutton(f_name2, text="預先開放換插", variable=self.var_preopen_b2, command=self.on_toggle_preopen_b2)
         self.chk_preopen_b2.pack(side="left", padx=6)
@@ -2826,7 +2826,7 @@ class ArchiveTaskTab(ttk.Frame):
             self.entry_name3.set(init_name3)
         self.entry_name3.pack(side="left", padx=2)
         self.bind_officer_autocomplete(self.entry_name3)
-        self.btn_open_folder_b3 = ttk.Button(f_name3, text="📂 查看人員", command=lambda: self.open_device_video_folder(3))
+        self.btn_open_folder_b3 = ttk.Button(f_name3, text="👤 查看人員", command=lambda: self.open_device_video_folder(3))
         self.var_preopen_b3 = tk.BooleanVar(value=False)
         self.chk_preopen_b3 = ttk.Checkbutton(f_name3, text="預先開放換插", variable=self.var_preopen_b3, command=self.on_toggle_preopen_b3)
         self.chk_preopen_b3.pack(side="left", padx=6)
@@ -3216,7 +3216,7 @@ class ArchiveTaskTab(ttk.Frame):
         self.on_toggle_preopen_b3()
 
     def open_device_video_folder(self, slot_idx):
-        """【📂 查看人員】直接進入該密錄器影片所在資料夾並開啟，供同仁確認佩戴者"""
+        """【👤 查看人員】直接進入該密錄器影片所在資料夾並開啟，供同仁確認佩戴者"""
         src_entry_map = {
             1: getattr(self, 'entry_bodycam1_src', None),
             2: getattr(self, 'entry_bodycam2_src', None),
@@ -3307,7 +3307,7 @@ class ArchiveTaskTab(ttk.Frame):
         1. 密錄器不限定死板硬體代號 (BODYCAM1/2/3)，依連線順序開啟反白！
         2. 連線 1 台 ➔ 開啟第一台；連線 2 台 ➔ 依序開啟第一、二台；連線 3 台 ➔ 全數開啟。
         3. 未連線之槽位：預設反灰關閉 (disabled)，由使用者透過「預先開放換插」核取方塊自主決定是否預先開！
-        4. 已連線之槽位：後方提供「📂 查看人員」按鈕，方便同仁一鍵開啟該設備影片資料夾確認佩戴同仁！
+        4. 已連線之槽位：後方提供「👤 查看人員」按鈕，方便同仁一鍵開啟該設備影片資料夾確認佩戴同仁！
         """
         all_disks = get_all_connected_disks()
         label_dash = self.app.config.get("label_dashcam", "DASHCAM").strip()
