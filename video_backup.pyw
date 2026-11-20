@@ -3215,6 +3215,19 @@ class ArchiveTaskTab(ttk.Frame):
         self.var_preopen_b3.set(not self.var_preopen_b3.get())
         self.on_toggle_preopen_b3()
 
+    def set_src_path(self, entry, path):
+        """安全寫入來源設備路徑至 Entry（自動防禦 disabled 狀態並確保內容精確更新）"""
+        if entry is None:
+            return
+        cur_state = str(entry.cget("state"))
+        if cur_state == "disabled":
+            entry.config(state="normal")
+        entry.delete(0, tk.END)
+        if path:
+            entry.insert(0, str(path).strip())
+        if cur_state == "disabled":
+            entry.config(state="disabled")
+
     def open_device_video_folder(self, slot_idx):
         """【👤 查看人員】直接進入該密錄器影片所在資料夾並開啟，供同仁確認佩戴者"""
         src_entry_map = {
@@ -3230,6 +3243,11 @@ class ArchiveTaskTab(ttk.Frame):
             return
 
         raw_path = entry.get().strip()
+        # 防呆即時刷新：若 Entry 內路徑為空或不存在，自動即時刷新設備連線重新鎖定
+        if not raw_path or not os.path.exists(raw_path):
+            self.refresh_device_connections(show_toast=False)
+            raw_path = entry.get().strip()
+
         if not raw_path or not os.path.exists(raw_path):
             messagebox.showwarning(
                 "設備未連線",
@@ -3239,7 +3257,7 @@ class ArchiveTaskTab(ttk.Frame):
 
         target_folder = self.get_device_video_directory(raw_path)
         if target_folder and os.path.exists(target_folder):
-            self.log(f"📂 [開啟影片資料夾] 正在開啟【密錄器：{slot_name}】：{target_folder}")
+            self.log(f"📂 [開啟人員影片] 正在開啟【密錄器：{slot_name}】：{target_folder}")
             open_folder_in_explorer(target_folder)
         else:
             self.log(f"📂 [開啟隨身碟根目錄] 正在開啟【密錄器：{slot_name}】：{raw_path}")
@@ -3317,8 +3335,7 @@ class ArchiveTaskTab(ttk.Frame):
         if not dash_path or not os.path.exists(dash_path):
             fp, _ = find_drive_by_label(label_dash, connected_disks=all_disks)
             if fp:
-                self.entry_dashcam_src.delete(0, tk.END)
-                self.entry_dashcam_src.insert(0, fp)
+                self.set_src_path(self.entry_dashcam_src, fp)
                 dash_path = fp
 
         is_dash, msg_dash = is_device_connected(dash_path, label_dash)
@@ -3328,44 +3345,45 @@ class ArchiveTaskTab(ttk.Frame):
             else:
                 self.lbl_status_dashcam.config(text="⚪ 未連線", foreground="#888888")
 
-        # 2. 收集所有連線中的密錄器隨身碟 (排除行車紀錄器)
+        # 2. 收集現場所有連線中的密錄器隨身碟 (排除行車紀錄器)
         dash_real_root = os.path.abspath(dash_path) if dash_path and os.path.exists(dash_path) else None
         connected_bodycams = []
 
-        # (a) 優先檢查現存設定/手動選取之路徑
-        for entry in [self.entry_bodycam1_src, self.entry_bodycam2_src, self.entry_bodycam3_src]:
-            p = entry.get().strip()
-            if p and os.path.exists(p):
-                rp = os.path.abspath(p)
-                if rp != dash_real_root and rp not in connected_bodycams:
-                    connected_bodycams.append(rp)
-
-        # (b) 從目前已連線磁碟尋找符合密錄器標籤之隨身碟
         bodycam_labels = [
             self.app.config.get("label_bodycam1", "BODYCAM1").strip().upper(),
             self.app.config.get("label_bodycam2", "BODYCAM2").strip().upper(),
             self.app.config.get("label_bodycam3", "BODYCAM3").strip().upper(),
         ]
+
+        # 依實際外接磁碟硬體與標籤/特徵掃描，不依賴可能錯位的舊 Entry 殘留值
         for d_path, d_vol in all_disks:
             rp = os.path.abspath(d_path)
             if rp == dash_real_root or rp in connected_bodycams:
                 continue
             vol_upper = (d_vol or "").strip().upper()
+            is_body = False
             if any(lbl in vol_upper for lbl in bodycam_labels if lbl) or "BODYCAM" in vol_upper:
+                is_body = True
+            else:
+                for c_dir in ["DCIM", "VIDEO", "RECORD", "MOVIE", "VIDEOS"]:
+                    if os.path.exists(os.path.join(rp, c_dir)):
+                        is_body = True
+                        break
+            if is_body:
                 connected_bodycams.append(rp)
 
         # 3. 依連線順序開啟反白，連線幾台就依序開
         # 第一台
         if len(connected_bodycams) >= 1:
             p1 = connected_bodycams[0]
-            self.entry_bodycam1_src.delete(0, tk.END)
-            self.entry_bodycam1_src.insert(0, p1)
+            self.set_src_path(self.entry_bodycam1_src, p1)
             _, msg1 = is_device_connected(p1, "")
             self.lbl_status_name1.config(text=f"🟢 {msg1}", foreground="#2E7D32")
             self.entry_name1.config(state="normal")
             if hasattr(self, 'btn_open_folder_b1'):
                 self.btn_open_folder_b1.pack(side="left", padx=6)
         else:
+            self.set_src_path(self.entry_bodycam1_src, "")
             self.lbl_status_name1.config(text="⚪ 未連線", foreground="#888888")
             if str(self.entry_name1.cget("state")) != "normal":
                 self.entry_name1.config(state="normal")
@@ -3377,8 +3395,7 @@ class ArchiveTaskTab(ttk.Frame):
         # 第二台
         if len(connected_bodycams) >= 2:
             p2 = connected_bodycams[1]
-            self.entry_bodycam2_src.delete(0, tk.END)
-            self.entry_bodycam2_src.insert(0, p2)
+            self.set_src_path(self.entry_bodycam2_src, p2)
             _, msg2 = is_device_connected(p2, "")
             self.lbl_status_name2.config(text=f"🟢 {msg2}", foreground="#2E7D32")
             self.entry_name2.config(state="normal")
@@ -3389,6 +3406,7 @@ class ArchiveTaskTab(ttk.Frame):
             if hasattr(self, 'btn_open_folder_b2'):
                 self.btn_open_folder_b2.pack(side="left", padx=6)
         else:
+            self.set_src_path(self.entry_bodycam2_src, "")
             # 第二台未連線：隱藏查看資料夾，顯示勾選方塊由使用者決定是否預先開
             if hasattr(self, 'btn_open_folder_b2'):
                 self.btn_open_folder_b2.pack_forget()
@@ -3409,8 +3427,7 @@ class ArchiveTaskTab(ttk.Frame):
         # 第三台
         if len(connected_bodycams) >= 3:
             p3 = connected_bodycams[2]
-            self.entry_bodycam3_src.delete(0, tk.END)
-            self.entry_bodycam3_src.insert(0, p3)
+            self.set_src_path(self.entry_bodycam3_src, p3)
             _, msg3 = is_device_connected(p3, "")
             self.lbl_status_name3.config(text=f"🟢 {msg3}", foreground="#2E7D32")
             self.entry_name3.config(state="normal")
@@ -3424,6 +3441,7 @@ class ArchiveTaskTab(ttk.Frame):
                 else:
                     self.btn_open_folder_b3.pack(side="left", padx=6)
         else:
+            self.set_src_path(self.entry_bodycam3_src, "")
             # 第三台未連線：隱藏查看資料夾，顯示勾選方塊由使用者決定是否預先開
             if hasattr(self, 'btn_open_folder_b3'):
                 self.btn_open_folder_b3.pack_forget()
@@ -3457,23 +3475,11 @@ class ArchiveTaskTab(ttk.Frame):
             summary_parts.append(f"第三台: {self.lbl_status_name3.cget('text')}")
             self.log(f"🔄 [設備連線刷新] {'、'.join(summary_parts)}")
 
-        if show_toast:
-            dash_txt = self.lbl_status_dashcam.cget("text") if hasattr(self, 'lbl_status_dashcam') else ""
-            summary_parts = []
-            if dash_txt:
-                summary_parts.append(f"行車: {dash_txt}")
-            summary_parts.append(f"密錄 1: {self.lbl_status_name1.cget('text')}")
-            summary_parts.append(f"密錄 2: {self.lbl_status_name2.cget('text')}")
-            summary_parts.append(f"密錄 3: {self.lbl_status_name3.cget('text')}")
-            self.log(f"🔄 [設備連線刷新] {'、'.join(summary_parts)}")
-
     def apply_lock_dashcam(self, is_locked):
-        """套用行車紀錄器區域之鎖定/解鎖狀態至元件"""
+        """套用行車紀錄器區域之鎖定/解鎖狀態至元件（不鎖定內部資料容器 entry_dashcam_src）"""
         state = "disabled" if is_locked else "normal"
         if hasattr(self, 'entry_dashcam_target'):
             self.entry_dashcam_target.config(state=state)
-        if hasattr(self, 'entry_dashcam_src'):
-            self.entry_dashcam_src.config(state=state)
         if hasattr(self, 'btn_dash_target'):
             self.btn_dash_target.config(state=state)
         if hasattr(self, 'btn_quick_dash'):
@@ -3496,16 +3502,10 @@ class ArchiveTaskTab(ttk.Frame):
             self.log("🔓 [行車紀錄器] 區域已解鎖，恢復可編輯狀態 (已儲存狀態)。")
 
     def apply_lock_bodycam(self, is_locked):
-        """套用密錄器區域之鎖定/解鎖狀態至元件"""
+        """套用密錄器區域之鎖定/解鎖狀態至元件（不鎖定內部資料容器 entry_bodycam1/2/3_src）"""
         state = "disabled" if is_locked else "normal"
         if hasattr(self, 'entry_bodycam_target'):
             self.entry_bodycam_target.config(state=state)
-        if hasattr(self, 'entry_bodycam1_src'):
-            self.entry_bodycam1_src.config(state=state)
-        if hasattr(self, 'entry_bodycam2_src'):
-            self.entry_bodycam2_src.config(state=state)
-        if hasattr(self, 'entry_bodycam3_src'):
-            self.entry_bodycam3_src.config(state=state)
         if hasattr(self, 'btn_body_target'):
             self.btn_body_target.config(state=state)
         if hasattr(self, 'btn_quick_b1'):
@@ -3667,8 +3667,7 @@ class ArchiveTaskTab(ttk.Frame):
                 path = d_info['path']
                 matched_name = d_info['label']
         if path:
-            self.entry_dashcam_src.delete(0, tk.END)
-            self.entry_dashcam_src.insert(0, path)
+            self.set_src_path(self.entry_dashcam_src, path)
             self.log(f"⚡ [行車紀錄器] 成功快速讀取：{path} (名稱: {matched_name})")
             self.app.save_config()
             self.refresh_device_connections()
@@ -3685,13 +3684,12 @@ class ArchiveTaskTab(ttk.Frame):
                 path = b_list[0]['path']
                 matched_name = b_list[0]['label']
         if path:
-            self.entry_bodycam1_src.delete(0, tk.END)
-            self.entry_bodycam1_src.insert(0, path)
-            self.log(f"⚡ [密錄器 1] 成功快速讀取：{path} (名稱: {matched_name})")
+            self.set_src_path(self.entry_bodycam1_src, path)
+            self.log(f"⚡ [密錄器：第一台] 成功快速讀取：{path} (名稱: {matched_name})")
             self.app.save_config()
             self.refresh_device_connections()
         else:
-            messagebox.showwarning("未找到硬碟", f"未找到密錄器 1 隨身碟！\n\n請確認傳輸線是否已插妥。")
+            messagebox.showwarning("未找到硬碟", f"未找到密錄器：第一台隨身碟！\n\n請確認傳輸線是否已插妥。")
 
     def quick_detect_b2(self):
         label = self.app.config.get("label_bodycam2", "BODYCAM2")
@@ -3706,13 +3704,12 @@ class ArchiveTaskTab(ttk.Frame):
                 path = b_list[0]['path']
                 matched_name = b_list[0]['label']
         if path:
-            self.entry_bodycam2_src.delete(0, tk.END)
-            self.entry_bodycam2_src.insert(0, path)
-            self.log(f"⚡ [密錄器 2] 成功快速讀取：{path} (名稱: {matched_name})")
+            self.set_src_path(self.entry_bodycam2_src, path)
+            self.log(f"⚡ [密錄器：第二台] 成功快速讀取：{path} (名稱: {matched_name})")
             self.app.save_config()
             self.refresh_device_connections()
         else:
-            messagebox.showwarning("未找到硬碟", f"未找到密錄器 2 隨身碟！\n\n請確認傳輸線是否已插妥。")
+            messagebox.showwarning("未找到硬碟", f"未找到密錄器：第二台隨身碟！\n\n請確認傳輸線是否已插妥。")
 
     def quick_detect_b3(self):
         label = self.app.config.get("label_bodycam3", "BODYCAM3")
@@ -3731,17 +3728,16 @@ class ArchiveTaskTab(ttk.Frame):
                         matched_name = b_cand['label']
                         break
         if path:
-            self.entry_bodycam3_src.delete(0, tk.END)
-            self.entry_bodycam3_src.insert(0, path)
-            self.log(f"⚡ [密錄器 3] 成功快速讀取：{path} (名稱: {matched_name})")
+            self.set_src_path(self.entry_bodycam3_src, path)
+            self.log(f"⚡ [密錄器：第三台] 成功快速讀取：{path} (名稱: {matched_name})")
             self.app.save_config()
             self.refresh_device_connections()
         else:
-            messagebox.showwarning("未找到硬碟", f"未找到密錄器 3 隨身碟！\n\n若因現場電腦 3 孔限制尚未插入，可待前階段複製完成後依提示換插。")
+            messagebox.showwarning("未找到硬碟", f"未找到密錄器：第三台隨身碟！\n\n若因現場電腦 3 孔限制尚未插入，可待前階段複製完成後依提示換插。")
 
     def quick_detect_all_devices(self, show_toast=True):
         """【⚡ 一鍵智慧偵測所有設備】
-        自動掃描所有外接 USB 插槽、記憶卡與密錄器，自動識別行車紀錄器與密錄器 1、2、3。
+        自動掃描所有外接 USB 插槽、記憶卡與密錄器，自動識別行車紀錄器與密錄器第一台、第二台、第三台。
         徹底解決公務電腦僅 3 個 USB 孔、新舊傳輸線（Type-C / 2.5mm）換插導致磁碟槽代碼亂跳與標籤不符之痛點！
         """
         start_dt = None
@@ -3774,51 +3770,47 @@ class ArchiveTaskTab(ttk.Frame):
 
         if dash_info:
             p = dash_info['path']
-            self.entry_dashcam_src.delete(0, tk.END)
-            self.entry_dashcam_src.insert(0, p)
+            self.set_src_path(self.entry_dashcam_src, p)
             cnt = len(dash_info['matched_files'])
             info_str = f"含時段影像 {cnt} 部" if start_dt else f"偵測到 {dash_info['all_videos_count']} 部影片"
             summary_lines.append(f"🚗 行車紀錄器：已鎖定 {p} ({dash_info['label']}，{info_str})")
             assigned_dash = True
         else:
-            self.entry_dashcam_src.delete(0, tk.END)
+            self.set_src_path(self.entry_dashcam_src, "")
             summary_lines.append("🚗 行車紀錄器：⚪ 未偵測到 (待插上讀卡機)")
 
         if len(body_list) >= 1:
             p1 = body_list[0]['path']
-            self.entry_bodycam1_src.delete(0, tk.END)
-            self.entry_bodycam1_src.insert(0, p1)
+            self.set_src_path(self.entry_bodycam1_src, p1)
             cnt1 = len(body_list[0]['matched_files'])
             info1 = f"含時段影像 {cnt1} 部" if start_dt else f"{body_list[0]['all_videos_count']} 部影片"
-            summary_lines.append(f"📹 密錄器 1：已鎖定 {p1} ({body_list[0]['label']}，{info1})")
+            summary_lines.append(f"📹 密錄器：第一台：已鎖定 {p1} ({body_list[0]['label']}，{info1})")
             assigned_b1 = True
         else:
-            self.entry_bodycam1_src.delete(0, tk.END)
-            summary_lines.append("📹 密錄器 1：⚪ 未偵測到")
+            self.set_src_path(self.entry_bodycam1_src, "")
+            summary_lines.append("📹 密錄器：第一台：⚪ 未偵測到")
 
         if len(body_list) >= 2:
             p2 = body_list[1]['path']
-            self.entry_bodycam2_src.delete(0, tk.END)
-            self.entry_bodycam2_src.insert(0, p2)
+            self.set_src_path(self.entry_bodycam2_src, p2)
             cnt2 = len(body_list[1]['matched_files'])
             info2 = f"含時段影像 {cnt2} 部" if start_dt else f"{body_list[1]['all_videos_count']} 部影片"
-            summary_lines.append(f"📹 密錄器 2：已鎖定 {p2} ({body_list[1]['label']}，{info2})")
+            summary_lines.append(f"📹 密錄器：第二台：已鎖定 {p2} ({body_list[1]['label']}，{info2})")
             assigned_b2 = True
         else:
-            self.entry_bodycam2_src.delete(0, tk.END)
-            summary_lines.append("📹 密錄器 2：⚪ 未偵測到")
+            self.set_src_path(self.entry_bodycam2_src, "")
+            summary_lines.append("📹 密錄器：第二台：⚪ 未偵測到")
 
         if len(body_list) >= 3:
             p3 = body_list[2]['path']
-            self.entry_bodycam3_src.delete(0, tk.END)
-            self.entry_bodycam3_src.insert(0, p3)
+            self.set_src_path(self.entry_bodycam3_src, p3)
             cnt3 = len(body_list[2]['matched_files'])
             info3 = f"含時段影像 {cnt3} 部" if start_dt else f"{body_list[2]['all_videos_count']} 部影片"
-            summary_lines.append(f"📹 密錄器 3：已鎖定 {p3} ({body_list[2]['label']}，{info3})")
+            summary_lines.append(f"📹 密錄器：第三台：已鎖定 {p3} ({body_list[2]['label']}，{info3})")
             assigned_b3 = True
         else:
-            self.entry_bodycam3_src.delete(0, tk.END)
-            summary_lines.append("📹 密錄器 3：⚪ 未偵測到")
+            self.set_src_path(self.entry_bodycam3_src, "")
+            summary_lines.append("📹 密錄器：第三台：⚪ 未偵測到")
 
         self.app.save_config()
         self.refresh_device_connections(show_toast=False)
@@ -4261,15 +4253,20 @@ class ArchiveTaskTab(ttk.Frame):
         self.log("🔍 [預檢確認] 正在快速比對各設備隨身碟連線狀態與時段影片...")
 
         label_dash = self.app.config.get("label_dashcam", "DASHCAM").strip()
-        label_b1 = self.app.config.get("label_bodycam1", "BODYCAM1").strip()
-        label_b2 = self.app.config.get("label_bodycam2", "BODYCAM2").strip()
-        label_b3 = self.app.config.get("label_bodycam3", "BODYCAM3").strip()
 
-        # 雙重驗證各設備
+        # 雙重驗證各設備（密錄器不拘泥於硬體標籤名稱，只要目前路徑存在即判定連線）
         dash_conn, dash_msg = is_device_connected(dashcam_src, label_dash)
-        b1_conn, b1_msg = is_device_connected(bodycam1_src, label_b1)
-        b2_conn, b2_msg = is_device_connected(bodycam2_src, label_b2)
-        b3_conn, b3_msg = is_device_connected(bodycam3_src, label_b3)
+        b1_conn, b1_msg = is_device_connected(bodycam1_src, "")
+        b2_conn, b2_msg = is_device_connected(bodycam2_src, "")
+        b3_conn, b3_msg = is_device_connected(bodycam3_src, "")
+
+        # 防呆過濾：若未真實連線且未預約換插，強制將該槽位視為無效，徹底防止背景殘留路徑引發幽靈連線
+        is_swap2 = getattr(self, 'is_swap_reserved_b2', False)
+        is_swap3 = getattr(self, 'is_swap_reserved_b3', False)
+        if not b2_conn and not is_swap2:
+            bodycam2_src = ""
+        if not b3_conn and not is_swap3:
+            bodycam3_src = ""
 
         req_dash = bool(dashcam_src)
         # 密錄器需求判定：
@@ -4277,8 +4274,8 @@ class ArchiveTaskTab(ttk.Frame):
         # 2. 處於預約換插狀態且有填寫同仁姓名 (is_swap_reserved_bX and nameX)
         # 若現場實際只有 1 台錄、只帶 1 台、或未點擊換插，完全排除後續槽位，直接複製結案！
         req_b1 = bool(name1 or b1_conn)
-        req_b2 = bool(b2_conn or (getattr(self, 'is_swap_reserved_b2', False) and name2))
-        req_b3 = bool(b3_conn or (getattr(self, 'is_swap_reserved_b3', False) and name3))
+        req_b2 = bool(b2_conn or (is_swap2 and name2))
+        req_b3 = bool(b3_conn or (is_swap3 and name3))
 
         needed_devices = []
         if req_dash:
