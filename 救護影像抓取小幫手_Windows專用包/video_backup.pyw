@@ -2750,27 +2750,20 @@ class ArchiveTaskTab(ttk.Frame):
         frame_step2.pack(fill="x", **pad)
         self.frame_step2 = frame_step2
 
-        # 頂部操作列：核心操作按鈕（一鍵智慧偵測所有設備 ＆ 刷新連線並讀取排班）
+        # 頂部操作列：核心整合按鈕（一鍵智慧偵測連線 ＆ 刷新排班）
         f_top_btns = ttk.Frame(frame_step2)
         f_top_btns.pack(fill="x", pady=(2, 5))
 
-        self.btn_auto_detect = ttk.Button(
+        self.btn_smart_sync = ttk.Button(
             f_top_btns,
-            text="⚡ 一鍵智慧偵測所有設備",
-            command=self.quick_detect_all_devices
+            text="⚡ 一鍵智慧偵測連線 ＆ 刷新排班",
+            command=self.smart_detect_and_sync_roster
         )
-        self.btn_auto_detect.pack(side="left", padx=(0, 6))
-
-        self.btn_read_roster = ttk.Button(
-            f_top_btns,
-            text="📋 刷新連線並讀取排班",
-            command=self.quick_read_roster
-        )
-        self.btn_read_roster.pack(side="left", padx=(0, 8))
+        self.btn_smart_sync.pack(side="left", padx=(0, 8))
 
         self.lbl_roster_hint = ttk.Label(
             f_top_btns,
-            text="(不認死磁碟槽與標籤，自動抓取行車與密錄器；排班可帶入同仁姓名)",
+            text="(智慧指紋免對齊槽位，自動偵測連線並自動比對排班同仁姓名)",
             foreground="#007ACC",
             font=('Helvetica', 9)
         )
@@ -2820,10 +2813,10 @@ class ArchiveTaskTab(ttk.Frame):
         self.lbl_status_name3 = ttk.Label(f_name3, text="⚪ 未檢測", foreground="#888888", font=('Helvetica', 9))
         self.lbl_status_name3.pack(side="left", padx=6)
 
-        ttk.Button(f_name3, text="🧹 清空", command=lambda: self.entry_name3.set(""), width=6).pack(side="left", padx=4)
+        ttk.Button(f_name3, text="🧹 清空全體人員", command=self.clear_all_officers, width=13).pack(side="left", padx=4)
         ttk.Label(f_name3, text="↳ (3人出勤時填寫；電腦3孔，任一設備完成後自動提示換插)", foreground="#007ACC", font=('Helvetica', 9)).pack(side="left", padx=2)
 
-        # 列 4: 姓名快速對調區 (含 1⇄2、2⇄3、1⇄3 及 1➔2➔3 順序輪替)
+        # 列 4: 姓名快速對調區 (含 1⇄2、2⇄3、1⇄3、1➔2➔3 輪替 及 一鍵清空全體姓名)
         f_swap_line = ttk.Frame(frame_step2)
         f_swap_line.pack(fill="x", pady=(3, 2))
         ttk.Label(f_swap_line, text="姓名快速對調：", width=14).pack(side="left")
@@ -2831,7 +2824,8 @@ class ArchiveTaskTab(ttk.Frame):
         ttk.Button(f_swap_line, text="⇅ 2 ⇄ 3 號", command=self.swap_2_3, width=10).pack(side="left", padx=2)
         ttk.Button(f_swap_line, text="⇅ 1 ⇄ 3 號", command=self.swap_1_3, width=10).pack(side="left", padx=2)
         ttk.Button(f_swap_line, text="🔄 1➔2➔3 輪替", command=self.rotate_names, width=13).pack(side="left", padx=2)
-        ttk.Label(f_swap_line, text="↳ (單鍵互換或輪替順移)", foreground="#666666", font=('Helvetica', 9)).pack(side="left", padx=2)
+        ttk.Button(f_swap_line, text="🧹 清空全體姓名", command=self.clear_all_officers, width=13).pack(side="left", padx=2)
+        ttk.Label(f_swap_line, text="↳ (單鍵互換、輪替順移或一鍵清空)", foreground="#666666", font=('Helvetica', 9)).pack(side="left", padx=2)
 
         # 3. 步驟 ❸：開始比對並自動複製 (移至路徑設定上方)
         frame_step3 = ttk.LabelFrame(self.content_frame, text="【步驟 ❸：開始比對並自動複製】", padding=6)
@@ -2853,8 +2847,8 @@ class ArchiveTaskTab(ttk.Frame):
         self.lbl_status = ttk.Label(frame_step3, text="狀態：準備就緒", foreground="#0066CC", font=('Helvetica', 9, 'bold'))
         self.lbl_status.pack(anchor="w")
 
-        # 4. 基本設定大區域 (行車紀錄器、密錄器，支援隱藏/展開)
-        frame_base_settings = ttk.LabelFrame(self.content_frame, text="【基本常設設定：行車紀錄器 ＆ 密錄器】", padding=6)
+        # 4. 基本設定大區域 (影像儲存目標目錄，支援隱藏/展開；隨身碟來源已由智慧指紋全自動接管)
+        frame_base_settings = ttk.LabelFrame(self.content_frame, text="【基本常設設定：影像儲存目標目錄】", padding=6)
         frame_base_settings.pack(fill="x", **pad)
         self.frame_base_settings = frame_base_settings
 
@@ -2863,9 +2857,9 @@ class ArchiveTaskTab(ttk.Frame):
 
         ttk.Label(
             f_base_header,
-            text="存放目錄與隨身碟來源路徑設定：",
+            text="💡 設備來源隨身碟已由「智慧特徵指紋」全自動偵測接管，無須指定！此處僅需確認影像存放目標目錄：",
             font=('Helvetica', 9),
-            foreground="#555555"
+            foreground="#007ACC"
         ).pack(side="left")
 
         # 讀取使用者折疊偏好（預設為展開 False，使用者點擊後記住狀態）
@@ -2873,19 +2867,19 @@ class ArchiveTaskTab(ttk.Frame):
 
         self.btn_toggle_base = ttk.Button(
             f_base_header,
-            text="🔼 隱藏此區域 (路徑設定)" if not self.is_base_settings_hidden else "🔽 展開此區域 (路徑設定)",
+            text="🔼 隱藏此區域 (目錄設定)" if not self.is_base_settings_hidden else "🔽 展開此區域 (目錄設定)",
             command=self.toggle_base_settings,
             width=18
         )
         self.btn_toggle_base.pack(side="right")
 
-        # 內部折疊容器 (包覆行車紀錄器與密錄器)
+        # 內部折疊容器 (僅包覆行車紀錄器與密錄器存放目錄)
         self.f_base_content = ttk.Frame(frame_base_settings)
         if not self.is_base_settings_hidden:
             self.f_base_content.pack(fill="x", pady=(2, 0))
 
-        # 4-1. 基本設定：行車紀錄器 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
-        frame_dashcam = ttk.LabelFrame(self.f_base_content, text="【行車紀錄器】", padding=6)
+        # 4-1. 行車紀錄器存放目錄 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
+        frame_dashcam = ttk.LabelFrame(self.f_base_content, text="【行車紀錄器存放目錄】", padding=6)
         frame_dashcam.pack(fill="x", pady=(2, 4))
         self.frame_dashcam = frame_dashcam
 
@@ -2900,19 +2894,8 @@ class ArchiveTaskTab(ttk.Frame):
         self.btn_lock_dashcam = ttk.Button(f_dash_target, text="🔒 鎖定", command=self.toggle_lock_dashcam, width=8)
         self.btn_lock_dashcam.pack(side="right")
 
-        f_dash_src = ttk.Frame(frame_dashcam)
-        f_dash_src.pack(fill="x", pady=2)
-        ttk.Label(f_dash_src, text="來源隨身碟：", width=12).pack(side="left")
-        self.entry_dashcam_src = ttk.Entry(f_dash_src, width=38)
-        self.entry_dashcam_src.insert(0, self.app.config.get("dashcam_src", ""))
-        self.entry_dashcam_src.pack(side="left", padx=4)
-        self.btn_quick_dash = ttk.Button(f_dash_src, text="⚡ 快速讀取", command=self.quick_detect_dashcam)
-        self.btn_quick_dash.pack(side="left", padx=2)
-        self.btn_browse_dash = ttk.Button(f_dash_src, text="瀏覽...", command=lambda: self.browse_path(self.entry_dashcam_src, "選擇行車紀錄器來源隨身碟"))
-        self.btn_browse_dash.pack(side="left", padx=2)
-
-        # 4-2. 基本設定：密錄器 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
-        frame_bodycam = ttk.LabelFrame(self.f_base_content, text="【密錄器】", padding=6)
+        # 4-2. 密錄器存放目錄 (含「🔒 鎖定 / 🔓 解鎖」按鈕)
+        frame_bodycam = ttk.LabelFrame(self.f_base_content, text="【密錄器存放目錄】", padding=6)
         frame_bodycam.pack(fill="x", pady=(2, 2))
         self.frame_bodycam = frame_bodycam
 
@@ -2927,39 +2910,15 @@ class ArchiveTaskTab(ttk.Frame):
         self.btn_lock_bodycam = ttk.Button(f_body_target, text="🔒 鎖定", command=self.toggle_lock_bodycam, width=8)
         self.btn_lock_bodycam.pack(side="right")
 
-        f_b1 = ttk.Frame(frame_bodycam)
-        f_b1.pack(fill="x", pady=2)
-        ttk.Label(f_b1, text="密錄器 1 來源：", width=12).pack(side="left")
-        self.entry_bodycam1_src = ttk.Entry(f_b1, width=38)
+        # 來源隨身碟變數 (不 pack 到 UI 上，完全由智慧指紋演算法全自動動態接管)
+        self.entry_dashcam_src = ttk.Entry(self.f_base_content)
+        self.entry_dashcam_src.insert(0, self.app.config.get("dashcam_src", ""))
+        self.entry_bodycam1_src = ttk.Entry(self.f_base_content)
         self.entry_bodycam1_src.insert(0, self.app.config.get("bodycam1_src", ""))
-        self.entry_bodycam1_src.pack(side="left", padx=4)
-        self.btn_quick_b1 = ttk.Button(f_b1, text="⚡ 快速讀取", command=self.quick_detect_b1)
-        self.btn_quick_b1.pack(side="left", padx=2)
-        self.btn_browse_b1 = ttk.Button(f_b1, text="瀏覽...", command=lambda: self.browse_path(self.entry_bodycam1_src, "選擇密錄器 1 來源槽"))
-        self.btn_browse_b1.pack(side="left", padx=2)
-
-        f_b2 = ttk.Frame(frame_bodycam)
-        f_b2.pack(fill="x", pady=2)
-        ttk.Label(f_b2, text="密錄器 2 來源：", width=12).pack(side="left")
-        self.entry_bodycam2_src = ttk.Entry(f_b2, width=38)
+        self.entry_bodycam2_src = ttk.Entry(self.f_base_content)
         self.entry_bodycam2_src.insert(0, self.app.config.get("bodycam2_src", ""))
-        self.entry_bodycam2_src.pack(side="left", padx=4)
-        self.btn_quick_b2 = ttk.Button(f_b2, text="⚡ 快速讀取", command=self.quick_detect_b2)
-        self.btn_quick_b2.pack(side="left", padx=2)
-        self.btn_browse_b2 = ttk.Button(f_b2, text="瀏覽...", command=lambda: self.browse_path(self.entry_bodycam2_src, "選擇密錄器 2 來源槽"))
-        self.btn_browse_b2.pack(side="left", padx=2)
-
-        # 密錄器 3 來源（常態直接顯示）
-        self.f_b3 = ttk.Frame(frame_bodycam)
-        self.f_b3.pack(fill="x", pady=2)
-        ttk.Label(self.f_b3, text="密錄器 3 來源：", width=12).pack(side="left")
-        self.entry_bodycam3_src = ttk.Entry(self.f_b3, width=38)
+        self.entry_bodycam3_src = ttk.Entry(self.f_base_content)
         self.entry_bodycam3_src.insert(0, self.app.config.get("bodycam3_src", ""))
-        self.entry_bodycam3_src.pack(side="left", padx=4)
-        self.btn_quick_b3 = ttk.Button(self.f_b3, text="⚡ 快速讀取", command=self.quick_detect_b3)
-        self.btn_quick_b3.pack(side="left", padx=2)
-        self.btn_browse_b3 = ttk.Button(self.f_b3, text="瀏覽...", command=lambda: self.browse_path(self.entry_bodycam3_src, "選擇密錄器 3 來源槽"))
-        self.btn_browse_b3.pack(side="left", padx=2)
 
         # 5. 詳細紀錄視窗
         frame_log = ttk.LabelFrame(self.content_frame, text="【傳輸紀錄】", padding=4)
@@ -3631,21 +3590,48 @@ class ArchiveTaskTab(ttk.Frame):
             else:
                 self.update_status("狀態：未找到外接攝影設備隨身碟，請確認插槽", "#C62828")
 
-    def quick_read_roster(self):
+    def clear_all_officers(self):
+        """【🧹 清空全體人員】將密錄器 1、2、3 之出勤同仁姓名全數清空"""
+        if hasattr(self, 'entry_name1'):
+            self.entry_name1.set("")
+        if hasattr(self, 'entry_name2'):
+            self.entry_name2.set("")
+        if hasattr(self, 'entry_name3'):
+            self.entry_name3.set("")
+        self.log("🧹 [清空人員] 已全數清空密錄器 1、2、3 之出勤同仁姓名。")
+        self.update_status("狀態：已清空全體出勤同仁姓名", "#555555")
+
+    def smart_detect_and_sync_roster(self):
+        """【⚡ 一鍵智慧偵測連線 ＆ 刷新排班】整合按鈕
+        1. 自動執行智慧指紋偵測所有隨身碟（行車紀錄器、密錄器1/2/3）並刷新狀態燈號。
+        2. 若出勤日期與時間已輸入，自動比對當月勤務表排班並填入同仁姓名。
+        """
+        # 1. 執行智慧特徵偵測所有設備
+        self.quick_detect_all_devices(show_toast=False)
+
+        # 2. 嘗試自動讀取排班同仁姓名
+        ad_year, month, day, err_msg = self.get_parsed_date_info()
+        time_input = self.entry_start_time.get().strip() if hasattr(self, 'entry_start_time') else ""
+        if err_msg or not time_input:
+            self.update_status("狀態：⚡ 設備智慧偵測完成！(輸入出勤時間可再自動帶入排班同仁)", "#008800")
+            return
+
+        # 呼叫排班表讀取 (skip_detect 避免重複掃描)
+        self.quick_read_roster(detect_first=False)
+
+    def quick_read_roster(self, detect_first=True):
         """【一鍵連線並讀取排班】
         執行順序：
         1. 執行前，先把密錄 1、2、3 的姓名全數清空。
-        2. 先自動執行一鍵智慧偵測所有設備，更新各隨身碟狀態。
+        2. 自動執行一鍵智慧偵測所有設備，更新各隨身碟狀態 (若 detect_first 為 True)。
         3. 再讀取當天排班 Excel，從當天勤務表比對救護班同仁，並依序填入已連線的密錄器。
         """
         # 1. 執行前，先把密錄 1、2、3 姓名清空
-        self.entry_name1.set("")
-        self.entry_name2.set("")
-        self.entry_name3.set("")
-        self.log("🧹 [清空姓名] 已清除密錄器 1、2、3 目前之人員姓名。")
+        self.clear_all_officers()
 
         # 2. 自動執行一鍵智慧偵測所有設備
-        self.quick_detect_all_devices(show_toast=False)
+        if detect_first:
+            self.quick_detect_all_devices(show_toast=False)
 
         # 3. 再讀取班
         ad_year, month, day, err_msg = self.get_parsed_date_info()
@@ -6153,16 +6139,6 @@ class VideoBackupApp:
         )
         self.lbl_save_status.pack(side="left", padx=10)
 
-        frame_detect = ttk.LabelFrame(parent, text="【診斷工具】當前已連接之硬碟與隨身碟清單", padding=10)
-        frame_detect.pack(fill="both", expand=True, **pad)
-
-        ttk.Button(frame_detect, text="🔍 重新整理並查看當前所有隨身碟名稱", command=self.refresh_disk_list).pack(anchor="w", pady=(0, 4))
-
-        self.txt_disks = tk.Text(frame_detect, height=7, font=("Courier", 10), bg="#FFFFFF", fg="#222222", relief="solid", bd=1)
-        self.txt_disks.pack(fill="both", expand=True)
-
-        self.refresh_disk_list()
-
         def _on_settings_mousewheel(event):
             if sys.platform == "darwin":
                 self.settings_canvas.yview_scroll(int(-1 * event.delta), "units")
@@ -6898,6 +6874,8 @@ class VideoBackupApp:
             messagebox.showerror("更新失敗", f"替換更新檔時發生錯誤：\n{e}\n\n請確認檔案未被防毒軟體鎖定，或以手動複製替換。")
 
     def refresh_disk_list(self):
+        if not hasattr(self, 'txt_disks'):
+            return
         self.txt_disks.delete(1.0, tk.END)
         disks = get_all_connected_disks()
         if not disks:
