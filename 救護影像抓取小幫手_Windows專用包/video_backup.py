@@ -1532,22 +1532,32 @@ class VehicleCDPController:
         return res;
     }}
 
-    function checkIsLoginPage() {{
+    function checkPageStage() {{
         var frames = getAllFrames(window);
         for (var i = 0; i < frames.length; i++) {{
             try {{
-                var d = frames[i].document;
-                var pw = d.querySelector('input[name="rt_admin_password"], input[type="password"]');
-                if (pw && (pw.offsetParent !== null || pw.offsetWidth > 0 || pw.offsetHeight > 0)) return true;
-                if ((frames[i].location.href || '').indexOf('login.php') !== -1) return true;
+                var fHref = (frames[i].location.href || '').toLowerCase();
+                if (fHref.indexOf('check_login') !== -1) return 'TRANSITION';
             }} catch(e) {{}}
         }}
-        return false;
+        for (var j = 0; j < frames.length; j++) {{
+            try {{
+                var d = frames[j].document;
+                var pw = d.querySelector('input[name="rt_admin_password"], input[type="password"]');
+                if (pw && (pw.offsetParent !== null || pw.offsetWidth > 0 || pw.offsetHeight > 0)) return 'LOGIN';
+                var fHref2 = (frames[j].location.href || '').toLowerCase();
+                if (fHref2.indexOf('login.php') !== -1 || fHref2.indexOf('/account/login') !== -1) return 'LOGIN';
+            }} catch(e) {{}}
+        }}
+        return 'SYSTEM';
     }}
 
     function runAutomation() {{
-        var isLogin = checkIsLoginPage();
-        if (isLogin) {{
+        var stage = checkPageStage();
+        if (stage === 'TRANSITION') {{
+            return;
+        }}
+        if (stage === 'LOGIN') {{
             handleLoginPage();
         }} else {{
             handleSystemPage();
@@ -1556,7 +1566,7 @@ class VehicleCDPController:
 
     function handleLoginPage() {{
         var frames = getAllFrames(window);
-        var u = null, p = null, subBtn = null, targetDoc = document;
+        var u = null, p = null, subBtn = null, targetDoc = document, targetWin = window;
         for (var i = 0; i < frames.length; i++) {{
             try {{
                 var d = frames[i].document;
@@ -1566,6 +1576,7 @@ class VehicleCDPController:
                     u = d.querySelector('input[name="rt_admin_username"], input[type="text"]');
                     subBtn = d.querySelector('input[name="Submit"], input[type="submit"][value*="登入"], input.ConWebButton, button[type="submit"]');
                     targetDoc = d;
+                    targetWin = frames[i];
                     break;
                 }}
             }} catch(e) {{}}
@@ -1595,49 +1606,70 @@ class VehicleCDPController:
         }}
 
         if (CFG.auto_submit) {{
-            bar.innerHTML = '<div style="display:flex;align-items:center;gap:8px;font-weight:bold;"><span style="font-size:16px">🚀</span> <span>【救護小幫手】已就緒！正在全自動為您點擊「登入」...</span></div><div style="font-size:12px;color:#7dd3fc">登入後自動切換至里程登記</div>';
+            bar.innerHTML = '<div style="display:flex;align-items:center;gap:8px;font-weight:bold;"><span style="font-size:16px">⏳</span> <span>【救護小幫手】正在等待帳密就緒並自動登入...</span></div><div style="font-size:12px;color:#7dd3fc">登入後自動切換至里程登記</div>';
 
+            if (window.__car_ext_sub_timer) return;
             var attempts = 0;
-            var subTimer = setInterval(function() {{
+            window.__car_ext_sub_timer = setInterval(function() {{
                 attempts++;
                 var uVal = u ? (u.value || '').trim() : '';
                 var pVal = p ? (p.value || '').trim() : '';
-                var isFilled = Boolean(uVal && (pVal || (p && p.matches && p.matches(':-webkit-autofill'))));
+                var uAuto = false, pAuto = false;
+                try {{ uAuto = Boolean(u && u.matches && u.matches(':-webkit-autofill')); }} catch(e) {{}}
+                try {{ pAuto = Boolean(p && p.matches && p.matches(':-webkit-autofill')); }} catch(e) {{}}
+                var isReady = Boolean((uVal || uAuto) && (pVal || pAuto));
 
-                if (isFilled || attempts >= 4) {{
-                    clearInterval(subTimer);
-                    submitLoginForm(u, p, subBtn, targetDoc);
+                if (isReady) {{
+                    clearInterval(window.__car_ext_sub_timer);
+                    window.__car_ext_sub_timer = null;
+                    submitLoginForm(u, p, subBtn, targetDoc, targetWin);
+                }} else if (attempts >= 20) {{
+                    clearInterval(window.__car_ext_sub_timer);
+                    window.__car_ext_sub_timer = null;
+                    bar.innerHTML = '<div style="display:flex;align-items:center;gap:8px;font-weight:bold;"><span style="font-size:16px">🔑</span> <span>【救護小幫手】請先選取或填入帳密，再點擊「登入」（登入後會自動導向里程登記）。</span></div>';
                 }}
-            }}, 250);
+            }}, 350);
         }} else {{
             bar.innerHTML = '<div style="display:flex;align-items:center;gap:8px;font-weight:bold;"><span style="font-size:16px">🔑</span> <span>【救護小幫手】車輛系統已就緒，請點擊「登入」完成登入。</span></div>';
         }}
     }}
 
-    function submitLoginForm(u, p, subBtn, targetDoc) {{
-        try {{ if (u) {{ u.focus(); u.dispatchEvent(new Event('input', {{ bubbles: true }})); u.dispatchEvent(new Event('change', {{ bubbles: true }})); }} }} catch(e){{}}
-        try {{ if (p) {{ p.focus(); p.dispatchEvent(new Event('input', {{ bubbles: true }})); p.dispatchEvent(new Event('change', {{ bubbles: true }})); }} }} catch(e){{}}
-        try {{ if (typeof rememberMe === 'function') rememberMe(); }} catch(e){{}}
+    function submitLoginForm(u, p, subBtn, targetDoc, targetWin) {{
+        var nowTs = Date.now();
+        var lastTop = window.__car_login_submit_lock_ts || 0;
+        var lastFrm = (targetWin && targetWin.__car_login_submit_lock_ts) || 0;
+        if (nowTs - Math.max(lastTop, lastFrm) < 4000) {{
+            return;
+        }}
+        window.__car_login_submit_lock_ts = nowTs;
+        if (targetWin) targetWin.__car_login_submit_lock_ts = nowTs;
 
-        if (subBtn) {{
-            try {{ subBtn.focus(); }} catch(e){{}}
-            try {{
-                var clickEvt = new MouseEvent('click', {{ bubbles: true, cancelable: true, view: window }});
-                subBtn.dispatchEvent(clickEvt);
-            }} catch(e){{}}
-            try {{ subBtn.click(); }} catch(e){{}}
+        var bar = window.document.getElementById('__car_ext_banner');
+        if (bar) {{
+            bar.innerHTML = '<div style="display:flex;align-items:center;gap:8px;font-weight:bold;"><span style="font-size:16px">🚀</span> <span>【救護小幫手】帳密已就緒！正在送出登入，請稍候...</span></div><div style="font-size:12px;color:#7dd3fc">登入後自動切換至里程登記</div>';
         }}
 
         try {{
-            var f = targetDoc.forms['frmLogin'] || (subBtn && subBtn.form) || targetDoc.querySelector('form');
-            if (f) {{
-                var ok = true;
-                if (typeof onSubmitCheck === 'function') ok = onSubmitCheck(f, false, false);
-                if (ok !== false) {{
-                    HTMLFormElement.prototype.submit.call(f);
-                }}
-            }}
+            if (targetWin && typeof targetWin.rememberMe === 'function') targetWin.rememberMe();
+            else if (typeof rememberMe === 'function') rememberMe();
         }} catch(e){{}}
+
+        if (subBtn) {{
+            try {{ subBtn.focus(); }} catch(e){{}}
+            try {{ subBtn.click(); }} catch(e){{}}
+        }} else {{
+            try {{
+                var f = targetDoc.forms['frmLogin'] || targetDoc.querySelector('form');
+                if (f) {{
+                    var ok = true;
+                    if (targetWin && typeof targetWin.onSubmitCheck === 'function') ok = targetWin.onSubmitCheck(f, false, false);
+                    else if (typeof onSubmitCheck === 'function') ok = onSubmitCheck(f, false, false);
+                    if (ok !== false) {{
+                        HTMLFormElement.prototype.submit.call(f);
+                    }}
+                }}
+            }} catch(e){{}}
+        }}
     }}
 
     function handleSystemPage() {{
@@ -1648,7 +1680,9 @@ class VehicleCDPController:
             var onMileage = false;
             for (var j = 0; j < frames.length; j++) {{
                 try {{
-                    if ((frames[j].location.href || '').indexOf('mileage_nw.php') !== -1) {{
+                    var fUrl = (frames[j].location.href || '').toLowerCase();
+                    if (fUrl.indexOf('check_login') !== -1 || fUrl.indexOf('login.php') !== -1) return;
+                    if (fUrl.indexOf('mileage_nw.php') !== -1) {{
                         onMileage = true;
                         break;
                     }}
@@ -1656,6 +1690,11 @@ class VehicleCDPController:
             }}
 
             if (!onMileage) {{
+                var nowNav = Date.now();
+                if (window.__car_nav_mileage_ts && nowNav - window.__car_nav_mileage_ts < 3000) {{
+                    return;
+                }}
+                window.__car_nav_mileage_ts = nowNav;
                 var navBar = window.document.getElementById('__car_ext_nav_bar');
                 if (!navBar) {{
                     navBar = window.document.createElement('div');
@@ -1703,7 +1742,6 @@ class VehicleCDPController:
                         addBtn.win.__last_add_t = nowT;
                         if (addBtn.el) {{
                             try {{ addBtn.el.focus(); }} catch(e) {{}}
-                            try {{ addBtn.el.dispatchEvent(new MouseEvent('click', {{ bubbles: true, cancelable: true, view: addBtn.win }})); }} catch(e) {{}}
                             try {{ addBtn.el.click(); }} catch(e) {{}}
                         }} else if (addBtn.fn) {{
                             try {{ addBtn.fn('add', '-1', ''); }} catch(e) {{}}
@@ -2910,6 +2948,10 @@ class VehicleCDPController:
         if target_fill and target_fill in self._decrypted_car_creds:
             direct_user = target_fill
             direct_pass = self._decrypted_car_creds[target_fill]
+        elif not target_fill and self._decrypted_car_creds:
+            first_u = acct_list[0] if acct_list and acct_list[0] in self._decrypted_car_creds else next(iter(self._decrypted_car_creds))
+            direct_user = first_u
+            direct_pass = self._decrypted_car_creds[first_u]
 
         payload_json = json.dumps({
             "accounts": acct_list,
@@ -2973,7 +3015,8 @@ class VehicleCDPController:
                 }}
 
                 var curUser = (u.value || '').trim();
-                var hasPass = pAuto || (p.value && p.value.length > 0) || (curUser.length > 0 && p !== null);
+                var hasRealPass = pAuto || (p.value && p.value.length > 0);
+                var hasPass = hasRealPass || (curUser.length > 0 && p !== null);
                 var accts = cfg.accounts || [];
 
                 var bar = targetDoc.getElementById('__car_acct_helper_bar');
@@ -3061,67 +3104,32 @@ class VehicleCDPController:
                     }}
                 }}
 
-                if (cfg.auto_submit && curUser) {{
+                if (cfg.auto_submit && (curUser || uAuto) && hasRealPass) {{
                     var subBtn = targetDoc.querySelector('input[name="Submit"], input[type="submit"][value*="登入"], input.ConWebButton, button[type="submit"]');
                     if (subBtn) {{
+                        var targetWin = targetDoc.defaultView || window;
+                        var nowSubTs = Date.now();
+                        var lastSubLock = Math.max(window.__car_login_submit_lock_ts || 0, targetWin.__car_login_submit_lock_ts || 0);
+                        if (nowSubTs - lastSubLock < 4000) {{
+                            return 'SUBMIT_COOLDOWN:' + (curUser || 'AUTO');
+                        }}
+                        window.__car_login_submit_lock_ts = nowSubTs;
+                        targetWin.__car_login_submit_lock_ts = nowSubTs;
+
                         if (stNode) {{
-                            stNode.innerHTML = '🚀 <span>已帶入帳號 <strong>' + curUser + '</strong>，<strong>正在自動點擊「登入」...</strong></span>';
+                            stNode.innerHTML = '🚀 <span>已帶入帳號 <strong>' + (curUser || '自動填入') + '</strong>，<strong>正在送出登入，請稍候...</strong></span>';
                         }}
 
-                        function doSubmitAction() {{
-                            try {{ u.focus(); u.dispatchEvent(new Event('input', {{ bubbles: true }})); u.dispatchEvent(new Event('change', {{ bubbles: true }})); }} catch(e) {{}}
-                            try {{ p.focus(); p.dispatchEvent(new Event('input', {{ bubbles: true }})); p.dispatchEvent(new Event('change', {{ bubbles: true }})); }} catch(e) {{}}
-                            try {{
-                                if (typeof targetDoc.defaultView.rememberMe === 'function') targetDoc.defaultView.rememberMe();
-                                else if (typeof rememberMe === 'function') rememberMe();
-                            }} catch(e) {{}}
+                        try {{
+                            if (typeof targetWin.rememberMe === 'function') targetWin.rememberMe();
+                            else if (typeof rememberMe === 'function') rememberMe();
+                        }} catch(e) {{}}
 
-                            try {{ subBtn.focus(); }} catch(e) {{}}
+                        // 單次正規點擊登入按鈕（完整攜帶 Chrome Autofill 密碼與 onclick 驗證，不重複連點中斷 POST）
+                        try {{ subBtn.focus(); }} catch(e) {{}}
+                        try {{ subBtn.click(); }} catch(e) {{}}
 
-                            // 1. 派發真實滑鼠點擊事件
-                            try {{
-                                var clickEvt = new MouseEvent('click', {{ bubbles: true, cancelable: true, view: targetDoc.defaultView || window }});
-                                subBtn.dispatchEvent(clickEvt);
-                            }} catch(e) {{}}
-
-                            // 2. 原生 click()
-                            try {{ subBtn.click(); }} catch(e) {{}}
-
-                            // 3. 原型鏈 submit() 備援
-                            try {{
-                                var fObj = targetDoc.forms['frmLogin'] || subBtn.form || targetDoc.querySelector('form');
-                                if (fObj) {{
-                                    var okSub = true;
-                                    if (typeof targetDoc.defaultView.onSubmitCheck === 'function') {{
-                                        okSub = targetDoc.defaultView.onSubmitCheck(fObj, false, false);
-                                    }} else if (typeof onSubmitCheck === 'function') {{
-                                        okSub = onSubmitCheck(fObj, false, false);
-                                    }}
-                                    if (okSub !== false) {{
-                                        HTMLFormElement.prototype.submit.call(fObj);
-                                    }}
-                                }}
-                            }} catch(e) {{}}
-                        }}
-
-                        // 立即執行一次點擊
-                        doSubmitAction();
-
-                        // 同時啟動在頁面內部的短週期重試（每 300ms 執行一次，持續 4 次，防範 Chrome 首次 focus 延遲）
-                        if (!window.__car_auto_submit_timer) {{
-                            var attempts = 0;
-                            window.__car_auto_submit_timer = setInterval(function() {{
-                                attempts++;
-                                if (attempts > 4 || (window.location.href || '').toLowerCase().indexOf('login') === -1) {{
-                                    clearInterval(window.__car_auto_submit_timer);
-                                    window.__car_auto_submit_timer = null;
-                                    return;
-                                }}
-                                doSubmitAction();
-                            }}, 300);
-                        }}
-
-                        return 'AUTO_SUBMITTING:' + curUser;
+                        return 'AUTO_SUBMITTING:' + (curUser || 'AUTO');
                     }}
                 }}
 
@@ -3147,6 +3155,15 @@ class VehicleCDPController:
 
         js_check = """(function(){
             try {
+                var href = (window.location.href || '').toLowerCase();
+                // 0. 若正在登入驗證過渡頁 (check_login.php) 或 DOM 尚未載入完成，回傳 LOADING 安靜等待
+                if (href.indexOf('check_login') !== -1) {
+                    return 'LOADING';
+                }
+                if (document.readyState === 'loading') {
+                    return 'LOADING';
+                }
+
                 // 1. 檢查是否存在可見的密碼輸入框，只要存在密碼框就100%是登入頁面
                 var pw = document.querySelector('input[name="rt_admin_password"], input[type="password"]');
                 if (pw && (pw.offsetParent !== null || pw.offsetWidth > 0 || pw.offsetHeight > 0)) {
@@ -3165,7 +3182,6 @@ class VehicleCDPController:
                 }
 
                 // 2. 檢查網址特徵
-                var href = (window.location.href || '').toLowerCase();
                 if (href.indexOf('login.php') !== -1 || href.indexOf('/account/login') !== -1 || href.indexOf('login.asp') !== -1) {
                     return 'LOGIN_PAGE';
                 }
@@ -3175,7 +3191,7 @@ class VehicleCDPController:
                     return 'LOGGED_IN';
                 }
 
-                if (document.readyState !== 'complete' && document.readyState !== 'interactive') {
+                if (document.readyState !== 'complete') {
                     return 'LOADING';
                 }
 
@@ -3201,16 +3217,20 @@ class VehicleCDPController:
                         return True, False, True, (t.get("title") or tab_title), u
                     elif state == "LOGGED_IN":
                         return True, True, False, (t.get("title") or tab_title), u
+                    elif state == "LOADING":
+                        return True, False, False, (t.get("title") or tab_title), u
 
-        # 若 WebSocket 暫時無回應，依 URL 智慧判斷
+        # 若 WebSocket 暫時無回應，依 URL 謹慎判斷（未確定時回傳載入中，絕不誤判已登入而亂跳轉）
         t_low = tab_url.lower()
+        if "check_login" in t_low:
+            return True, False, False, tab_title, tab_url
         if "login.php" in t_low or "/account/login" in t_low or "login.asp" in t_low:
             return True, False, True, tab_title, tab_url
         if "mileage" in t_low or "main" in t_low or "index.php" in t_low:
             return True, True, False, tab_title, tab_url
 
-        # 首頁若無 login 字樣且含有 car 路徑，預設視為已進入系統
-        return True, True, False, tab_title, tab_url
+        # 根目錄 /car/ 在 DOM 尚未確認前視為載入中（待下一拍確認是登入頁還是已登入）
+        return True, False, False, tab_title, tab_url
 
     def evaluate_in_background(self, js_code: str, target_url: str = DEFAULT_CAR_SYSTEM_URL, timeout: float = 5.0) -> tuple:
         """在背景靜默對車輛系統分頁執行 JavaScript，不切換分頁、不喚醒視窗、不搶焦點"""
@@ -3396,10 +3416,24 @@ class VehicleCDPController:
                 }}
 
                 var frames = getAllFrames(window);
+                // 嚴格守門：只要任意 Frame 還在登入頁或登入驗證過渡頁 (check_login)，絕不強行跳轉 mileage_nw.php
+                for (var g = 0; g < frames.length; g++) {{
+                    try {{
+                        var gHref = (frames[g].location.href || '').toLowerCase();
+                        if (gHref.indexOf('login.php') !== -1 || gHref.indexOf('/account/login') !== -1 || gHref.indexOf('check_login') !== -1) {{
+                            return 'ON_LOGIN_PAGE';
+                        }}
+                        var gPw = frames[g].document.querySelector('input[name="rt_admin_password"], input[type="password"]');
+                        if (gPw && (gPw.offsetParent !== null || gPw.offsetWidth > 0 || gPw.offsetHeight > 0)) {{
+                            return 'ON_LOGIN_PAGE';
+                        }}
+                    }} catch(e) {{}}
+                }}
+
                 var onMileage = false;
                 for (var j = 0; j < frames.length; j++) {{
                     try {{
-                        if ((frames[j].location.href || '').indexOf('mileage_nw.php') !== -1) {{
+                        if ((frames[j].location.href || '').toLowerCase().indexOf('mileage_nw.php') !== -1) {{
                             onMileage = true;
                             break;
                         }}
@@ -3407,6 +3441,11 @@ class VehicleCDPController:
                 }}
 
                 if (!onMileage) {{
+                    var nowNavT = Date.now();
+                    if (window.__car_nav_mileage_ts && nowNavT - window.__car_nav_mileage_ts < 3000) {{
+                        return 'NAVIGATING_COOLDOWN';
+                    }}
+                    window.__car_nav_mileage_ts = nowNavT;
                     window.location.href = cfg.mileage_url;
                     return 'NAVIGATING_TO_MILEAGE';
                 }}
@@ -3433,7 +3472,6 @@ class VehicleCDPController:
                             addBtn.win.__last_add_t = nowT;
                             if (addBtn.el) {{
                                 try {{ addBtn.el.focus(); }} catch(e) {{}}
-                                try {{ addBtn.el.dispatchEvent(new MouseEvent('click', {{ bubbles: true, cancelable: true, view: addBtn.win }})); }} catch(e) {{}}
                                 try {{ addBtn.el.click(); }} catch(e) {{}}
                             }} else if (addBtn.fn) {{
                                 try {{ addBtn.fn('add', '-1', ''); }} catch(e) {{}}
@@ -7577,6 +7615,9 @@ class VideoBackupApp:
             )
             self.root.update_idletasks()
 
+        self._car_all_in_one_seq = getattr(self, '_car_all_in_one_seq', 0) + 1
+        my_seq = self._car_all_in_one_seq
+
         def _all_in_one_worker():
             force_restart = bool(
                 self.car_cdp.is_running()
@@ -7594,27 +7635,33 @@ class VideoBackupApp:
             )
             if ok:
                 self.car_cdp.activate_window(target_url)
-                time.sleep(0.5)
-                # 登入頁檢測並立即輔助登入
-                has_tab, is_logged_in, is_login_page, _, _ = self.car_cdp.check_car_login_state(target_url)
-                if has_tab and is_login_page:
-                    self.car_cdp.assist_car_login_page(
-                        target_url=target_url,
-                        preferred_account=pref_acct,
-                        auto_submit=True,
-                    )
-                # 持續輪詢直到進入里程登記並完成選取
-                for _ in range(35):
-                    time.sleep(0.5)
-                    m_res = self.car_cdp.assist_car_mileage_flow(target_url=target_url, target_license=target_lic)
-                    if isinstance(m_res, str) and m_res.startswith("SUCCESS_FILLED"):
-                        self.car_mileage_flow_completed = True
-                        self.car_mileage_flow_active = False
-                        parts = m_res.split(":")
-                        l_val = parts[1] if len(parts) > 1 else target_lic
-                        d_val = parts[2] if len(parts) > 2 else ""
-                        self.root.after(0, lambda: self._on_mileage_flow_success_ui(l_val, d_val))
+                # 有序狀態機推進：先確認登入完成，絕不於登入頁強行跳轉導致閃爍
+                for _ in range(40):
+                    if getattr(self, '_car_all_in_one_seq', 0) != my_seq:
                         break
+                    time.sleep(0.8)
+                    has_tab, is_logged_in, is_login_page, _, _ = self.car_cdp.check_car_login_state(target_url)
+                    if not has_tab:
+                        continue
+                    if is_login_page:
+                        # 仍在登入頁：呼叫登入輔助（內含 4 秒冷卻鎖，帳密就緒才單次點擊，不連點狂閃）
+                        self.car_cdp.assist_car_login_page(
+                            target_url=target_url,
+                            preferred_account=pref_acct,
+                            auto_submit=True,
+                        )
+                        continue
+                    if is_logged_in:
+                        # 確認已登入成功，才進入里程登記自動化
+                        m_res = self.car_cdp.assist_car_mileage_flow(target_url=target_url, target_license=target_lic)
+                        if isinstance(m_res, str) and m_res.startswith("SUCCESS_FILLED"):
+                            self.car_mileage_flow_completed = True
+                            self.car_mileage_flow_active = False
+                            parts = m_res.split(":")
+                            l_val = parts[1] if len(parts) > 1 else target_lic
+                            d_val = parts[2] if len(parts) > 2 else ""
+                            self.root.after(0, lambda l=l_val, d=d_val: self._on_mileage_flow_success_ui(l, d))
+                            break
             else:
                 ext_dir = self.car_cdp.ensure_car_helper_extension(
                     target_url=target_url,
