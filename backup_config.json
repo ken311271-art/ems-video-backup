@@ -59,5 +59,8 @@
   "car_chrome_profile": "Profile 3",
   "car_preferred_account": "AUTO",
   "car_heartbeat_enabled": true,
-  "station_name": "消防分隊"
+  "station_name": "消防分隊",
+  "car_target_license": "BVX-0039",
+  "car_auto_submit_login": true,
+  "car_auto_mileage": true
 }

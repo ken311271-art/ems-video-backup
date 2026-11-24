@@ -41,6 +41,36 @@ CAR_SYSTEM_URL_PRESETS = [
     "https://fems.taichung.gov.tw/HPG01000/Index",
 ]
 
+DEFAULT_CAR_TARGET_LICENSE = "BVX-0039"  # 十九甲分隊主力救護車
+DEFAULT_CAR_LICENSE_PRESETS = [
+    "BVX-0039",
+    "BPY-0620",
+    "KEP-7273",
+    "EPE-3306",
+    "638-NVM",
+    "KEP-0578",
+    "KES-8219",
+    "BXJ-2183",
+    "BTB-2181",
+    "KEP-7283",
+]
+
+
+def get_car_mileage_url(base_url: str = DEFAULT_CAR_SYSTEM_URL) -> str:
+    """取得車輛管理系統里程登記頁面 (pages/mileage_nw.php) 絕對網址"""
+    base = (base_url or "").strip()
+    if not base:
+        return "http://car.tccf.gov.tw/car/pages/mileage_nw.php"
+    if "pages/mileage_nw.php" in base:
+        return base
+    parsed = urllib.parse.urlparse(base)
+    scheme = parsed.scheme or "http"
+    netloc = parsed.netloc or "car.tccf.gov.tw"
+    path = parsed.path or "/car/"
+    if "/car" in path:
+        return f"{scheme}://{netloc}/car/pages/mileage_nw.php"
+    return f"{scheme}://{netloc}/pages/mileage_nw.php"
+
 # 消防分隊同仁名冊預設清單（供下拉選單與字元自動過濾，讀取勤務表後自動更新為實際同仁名冊）
 DEFAULT_OFFICER_NAMES = [
     "隊員A", "隊員B", "隊員C", "隊員D",
@@ -1263,6 +1293,82 @@ def build_car_heartbeat_bookmarklet() -> str:
     )
 
 
+def build_car_mileage_bookmarklet(target_license: str = DEFAULT_CAR_TARGET_LICENSE) -> str:
+    """建立可於任何瀏覽器執行的一鍵里程登記 (BVX-0039) 書籤腳本"""
+    lic = (target_license or DEFAULT_CAR_TARGET_LICENSE).strip()
+    return (
+        f"(function(){{"
+        f"var targetLic='{lic}';"
+        "var href=(window.location.href||'').toLowerCase();"
+        "if(href.indexOf('login.php')!==-1||href.indexOf('/account/login')!==-1){"
+        "  var u=document.querySelector('input[name=\"rt_admin_username\"], input[type=\"text\"]');"
+        "  var p=document.querySelector('input[name=\"rt_admin_password\"], input[type=\"password\"]');"
+        "  var btn=document.querySelector('input[name=\"Submit\"], input[type=\"submit\"][value*=\"登入\"], .ConWebButton');"
+        "  if(u&&p&&u.value&&(p.value||p.matches(':-webkit-autofill'))&&btn){"
+        "    try{if(typeof rememberMe==='function')rememberMe();}catch(e){}"
+        "    btn.click();return;"
+        "  }else{"
+        "    alert('🔑 請先確認帳號與密碼已填妥，再點擊此書籤或手動按登入！');return;"
+        "  }"
+        "}"
+        "if(href.indexOf('mileage_nw.php')===-1){"
+        "  var base=window.location.origin+(window.location.pathname.indexOf('/car/')!==-1?'/car/':'/');"
+        "  window.location.href=base+'pages/mileage_nw.php';"
+        "  return;"
+        "}"
+        "function fillMileage(){"
+        "  var selLic=document.getElementById('ryylicense')||document.querySelector('select[name=\"ryylicense\"]');"
+        "  if(!selLic){"
+        "    var addBtn=document.querySelector('img[title=\"添加新記錄\"], img[alt=\"添加新記錄\"], img[src*=\"add.gif\"], img[onclick*=\"dr5__doPostBack\"][onclick*=\"add\"]');"
+        "    if(addBtn){addBtn.click();setTimeout(fillMileage,500);return;}"
+        "    if(typeof window.dr5__doPostBack==='function'){window.dr5__doPostBack('add','-1','');setTimeout(fillMileage,500);return;}"
+        "    setTimeout(fillMileage,400);return;"
+        "  }"
+        "  var matchedVal='';"
+        "  for(var i=0;i<selLic.options.length;i++){"
+        "    var opt=selLic.options[i];"
+        "    if(opt.value.indexOf(targetLic)!==-1||opt.text.indexOf(targetLic)!==-1){"
+        "      selLic.selectedIndex=i;selLic.value=opt.value;matchedVal=opt.value;break;"
+        "    }"
+        "  }"
+        "  if(matchedVal){"
+        "    selLic.dispatchEvent(new Event('change',{bubbles:true}));"
+        "    if(typeof window.search_car_mileage==='function'){try{window.search_car_mileage(matchedVal);}catch(e){}}"
+        "  }"
+        "  var selDate=document.getElementById('ryymdate')||document.querySelector('select[name=\"ryymdate\"]');"
+        "  var now=new Date();"
+        "  var yyyy=now.getFullYear();"
+        "  var mm=String(now.getMonth()+1).padStart(2,'0');"
+        "  var dd=String(now.getDate()).padStart(2,'0');"
+        "  var todayStr=yyyy+'-'+mm+'-'+dd;"
+        "  if(selDate){"
+        "    var dMatched=false;"
+        "    for(var j=0;j<selDate.options.length;j++){"
+        "      var dOpt=selDate.options[j];"
+        "      if(dOpt.value===todayStr||dOpt.text.indexOf(todayStr)!==-1){"
+        "        selDate.selectedIndex=j;selDate.value=dOpt.value;dMatched=true;break;"
+        "      }"
+        "    }"
+        "    if(!dMatched&&selDate.options.length>1){"
+        "      for(var k=0;k<selDate.options.length;k++){"
+        "        if(selDate.options[k].value){selDate.selectedIndex=k;selDate.value=selDate.options[k].value;break;}"
+        "      }"
+        "    }"
+        "    selDate.dispatchEvent(new Event('change',{bubbles:true}));"
+        "  }"
+        "  var pill=document.getElementById('__car_mileage_done_bar');"
+        "  if(!pill){"
+        "    pill=document.createElement('div');pill.id='__car_mileage_done_bar';"
+        "    pill.style.cssText='position:fixed;top:0;left:0;right:0;background:linear-gradient(90deg,#065f46,#047857);color:#ffffff;padding:10px 18px;font-size:14px;font-weight:bold;z-index:999999;box-shadow:0 4px 16px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #34d399;font-family:sans-serif;';"
+        "    pill.innerHTML='<span>🚑 <strong>【已自動添加記錄 ＆ 預選車牌 '+targetLic+' 與今日日期 '+todayStr+'】</strong><br><span style=\"font-size:12px;font-weight:normal;color:#a7f3d0\">👉 請接續輸入今日出勤里程並按儲存。</span></span><button onclick=\"this.parentElement.remove();\" style=\"background:#059669;color:#fff;border:1px solid #6ee7b7;border-radius:4px;padding:3px 8px;cursor:pointer;\">✕ 關閉</button>';"
+        "    document.body.appendChild(pill);document.body.style.paddingTop='54px';"
+        "  }"
+        "}"
+        "fillMileage();"
+        "})();"
+    )
+
+
 class VehicleCDPController:
     """
     車輛系統專用受控瀏覽器管理器 (Chrome DevTools Protocol)
@@ -2060,6 +2166,7 @@ class VehicleCDPController:
 
             car_bookmarks = [
                 ("🚗 車輛管理系統", "http://car.tccf.gov.tw/car/"),
+                ("🚑 一鍵里程登記(BVX-0039)", "javascript:" + build_car_mileage_bookmarklet()),
                 ("🚒 裝備器材系統", "https://fems.taichung.gov.tw/HPG01000/Index"),
                 ("💓 車輛系統心跳保活", "javascript:" + build_car_heartbeat_bookmarklet()),
             ]
@@ -2289,6 +2396,7 @@ class VehicleCDPController:
         accounts: list = None,
         preferred_account: str = "",
         force_fill_account: str = "",
+        auto_submit: bool = True,
     ) -> str:
         """
         在車輛管理系統登入頁 (login.php) 提供智慧帳密輔助與上方快速切換列：
@@ -2333,6 +2441,7 @@ class VehicleCDPController:
             "direct_user": direct_user,
             "direct_pass": direct_pass,
             "profile_mode": self.get_active_profile_mode(),
+            "auto_submit": bool(auto_submit),
         }, ensure_ascii=False)
 
         js_assist = f"""(function(cfg) {{
@@ -2472,6 +2581,31 @@ class VehicleCDPController:
                                 break;
                             }}
                         }}
+                    }}
+                }}
+
+                if (cfg.auto_submit && hasPass && curUser && !window.__car_auto_submitted) {{
+                    var subBtn = targetDoc.querySelector('input[name="Submit"], input[type="submit"][value*="登入"], input.ConWebButton');
+                    if (subBtn) {{
+                        window.__car_auto_submitted = true;
+                        if (stNode) {{
+                            stNode.innerHTML = '🚀 <span>已自動填入帳號 <strong>' + curUser + '</strong> 與密碼，<strong>正在自動點擊「登入」...</strong></span>';
+                        }}
+                        setTimeout(function() {{
+                            try {{
+                                if (typeof targetDoc.defaultView.rememberMe === 'function') {{
+                                    targetDoc.defaultView.rememberMe();
+                                }} else if (typeof rememberMe === 'function') {{
+                                    rememberMe();
+                                }}
+                            }} catch(e) {{}}
+                            try {{
+                                subBtn.click();
+                            }} catch(e) {{
+                                if (targetDoc.forms['frmLogin']) targetDoc.forms['frmLogin'].submit();
+                            }}
+                        }}, 350);
+                        return 'AUTO_SUBMITTING:' + curUser;
                     }}
                 }}
 
@@ -2651,6 +2785,151 @@ class VehicleCDPController:
             val = res.get("result", {}).get("value")
             return True, str(val) if val is not None else "OK"
         return True, str(res)
+
+    def assist_car_mileage_flow(
+        self,
+        target_url: str = DEFAULT_CAR_SYSTEM_URL,
+        target_license: str = DEFAULT_CAR_TARGET_LICENSE,
+        target_date: str = "",
+    ) -> str:
+        """
+        在已登入之車輛系統中執行一鍵里程登記全自動化：
+        1. 若網址尚未在 mileage_nw.php，自動將網址跳轉至 http://car.tccf.gov.tw/car/pages/mileage_nw.php
+        2. 進入頁面後，自動尋找並點擊「添加新記錄」(add.gif / dr5__doPostBack)
+        3. 自動於牌照選單中選取 BVX-0039 並觸發 search_car_mileage
+        4. 自動於日期選單中選取今日日期 (YYYY-MM-DD) 並觸發 change
+        5. 建立頂部顯眼之成功提示浮動列
+        """
+        if not self.is_running():
+            return "NOT_RUNNING"
+        car_tabs = self.get_car_tabs(target_url)
+        if not car_tabs:
+            return "NO_TAB"
+
+        target_tab = None
+        for t in car_tabs:
+            u = (t.get("url", "") or "").lower()
+            if "mileage_nw.php" in u:
+                target_tab = t
+                break
+        if not target_tab:
+            for t in car_tabs:
+                if "login" not in (t.get("url", "") or "").lower():
+                    target_tab = t
+                    break
+        if not target_tab:
+            target_tab = car_tabs[0]
+
+        ws = target_tab.get("webSocketDebuggerUrl")
+        if not ws:
+            return "NO_WS"
+
+        mileage_url = get_car_mileage_url(target_url)
+        payload_json = json.dumps({
+            "mileage_url": mileage_url,
+            "target_license": (target_license or DEFAULT_CAR_TARGET_LICENSE).strip(),
+            "target_date": (target_date or "").strip(),
+        }, ensure_ascii=False)
+
+        js_code = f"""(function(cfg) {{
+            try {{
+                var doc = document;
+                var curUrl = (window.location.href || '').toLowerCase();
+                if (curUrl.indexOf('login.php') !== -1 || curUrl.indexOf('/account/login') !== -1) {{
+                    return 'ON_LOGIN_PAGE';
+                }}
+
+                if (curUrl.indexOf('mileage_nw.php') === -1) {{
+                    window.location.href = cfg.mileage_url;
+                    return 'NAVIGATING_TO_MILEAGE';
+                }}
+
+                var selLic = doc.getElementById('ryylicense') || doc.querySelector('select[name="ryylicense"]');
+                if (!selLic) {{
+                    var addBtn = doc.querySelector('img[title="添加新記錄"], img[alt="添加新記錄"], img[src*="add.gif"], img[onclick*="dr5__doPostBack"][onclick*="add"]');
+                    if (addBtn) {{
+                        addBtn.click();
+                        return 'CLICKED_ADD';
+                    }}
+                    if (typeof window.dr5__doPostBack === 'function') {{
+                        window.dr5__doPostBack('add', '-1', '');
+                        return 'CALLED_DR5_ADD';
+                    }}
+                    return 'WAITING_ADD_BUTTON';
+                }}
+
+                var targetLic = cfg.target_license || 'BVX-0039';
+                var matchedLic = '';
+                for (var i = 0; i < selLic.options.length; i++) {{
+                    var opt = selLic.options[i];
+                    if (opt.value.indexOf(targetLic) !== -1 || opt.text.indexOf(targetLic) !== -1) {{
+                        selLic.selectedIndex = i;
+                        selLic.value = opt.value;
+                        matchedLic = opt.value;
+                        break;
+                    }}
+                }}
+                if (matchedLic) {{
+                    selLic.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    if (typeof window.search_car_mileage === 'function') {{
+                        try {{ window.search_car_mileage(matchedLic); }} catch(e) {{}}
+                    }}
+                }}
+
+                var selDate = doc.getElementById('ryymdate') || doc.querySelector('select[name="ryymdate"]');
+                var tDate = cfg.target_date;
+                if (!tDate) {{
+                    var now = new Date();
+                    var yyyy = now.getFullYear();
+                    var mm = String(now.getMonth() + 1).padStart(2, '0');
+                    var dd = String(now.getDate()).padStart(2, '0');
+                    tDate = yyyy + '-' + mm + '-' + dd;
+                }}
+
+                var matchedDate = '';
+                if (selDate) {{
+                    for (var j = 0; j < selDate.options.length; j++) {{
+                        var dOpt = selDate.options[j];
+                        if (dOpt.value === tDate || dOpt.text.indexOf(tDate) !== -1) {{
+                            selDate.selectedIndex = j;
+                            selDate.value = dOpt.value;
+                            matchedDate = dOpt.value;
+                            break;
+                        }}
+                    }}
+                    if (!matchedDate && selDate.options.length > 1) {{
+                        for (var k = 0; k < selDate.options.length; k++) {{
+                            if (selDate.options[k].value) {{
+                                selDate.selectedIndex = k;
+                                selDate.value = selDate.options[k].value;
+                                matchedDate = selDate.options[k].value;
+                                break;
+                            }}
+                        }}
+                    }}
+                    selDate.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                }}
+
+                var bar = doc.getElementById('__car_mileage_done_bar');
+                if (!bar) {{
+                    bar = doc.createElement('div');
+                    bar.id = '__car_mileage_done_bar';
+                    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;background:linear-gradient(90deg,#065f46,#047857);color:#ffffff;padding:10px 18px;font-size:14px;font-weight:bold;z-index:999999;box-shadow:0 4px 16px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #34d399;font-family:sans-serif;';
+                    bar.innerHTML = '<span>🚑 <strong>【救護小幫手】已為您自動添加新記錄 ＆ 預選車牌【' + (matchedLic || targetLic) + '】與今日日期【' + (matchedDate || tDate) + '】！</strong><br><span style="font-size:12px;font-weight:normal;color:#a7f3d0">👉 請接續輸入今日出勤里程並按儲存。</span></span><button onclick="this.parentElement.remove();" style="background:#059669;color:#fff;border:1px solid #6ee7b7;border-radius:4px;padding:4px 10px;cursor:pointer;font-weight:bold;">關閉提示 ✕</button>';
+                    (doc.body || doc.documentElement).appendChild(bar);
+                    if (doc.body) doc.body.style.paddingTop = '54px';
+                }}
+
+                return 'SUCCESS_FILLED:' + (matchedLic || targetLic) + ':' + (matchedDate || tDate);
+            }} catch(e) {{
+                return 'ERR:' + e;
+            }}
+        }})({payload_json})"""
+
+        ok, res = self._ws_eval(ws, js_code, timeout=3.0)
+        if ok and isinstance(res, str):
+            return res
+        return "IDLE"
 
 
 class ArchiveTaskTab(ttk.Frame):
@@ -5595,6 +5874,8 @@ class VideoBackupApp:
         self.last_car_heartbeat_time = 0.0
         self.last_car_heartbeat_str = "尚未發送"
         self.car_heartbeat_interval_sec = 180  # 每 3 分鐘自動發送防斷線心跳
+        self.car_mileage_flow_active = False
+        self.car_mileage_flow_completed = False
 
         self.config = self.load_config()
 
@@ -5971,7 +6252,10 @@ class VideoBackupApp:
             "car_system_url": DEFAULT_CAR_SYSTEM_URL,
             "car_chrome_profile": DEFAULT_CAR_CHROME_EMAIL,
             "car_preferred_account": "AUTO",
-            "car_heartbeat_enabled": True
+            "car_heartbeat_enabled": True,
+            "car_target_license": DEFAULT_CAR_TARGET_LICENSE,
+            "car_auto_submit_login": True,
+            "car_auto_mileage": True
         }
         if os.path.exists(CONFIG_FILE):
             try:
@@ -6012,6 +6296,12 @@ class VideoBackupApp:
                 self.config["car_preferred_account"] = sel_acct if sel_acct else "AUTO"
             if hasattr(self, 'var_car_heartbeat'):
                 self.config["car_heartbeat_enabled"] = bool(self.var_car_heartbeat.get())
+            if hasattr(self, 'cb_car_target_license'):
+                self.config["car_target_license"] = self.cb_car_target_license.get().strip() or DEFAULT_CAR_TARGET_LICENSE
+            if hasattr(self, 'var_car_auto_submit_login'):
+                self.config["car_auto_submit_login"] = bool(self.var_car_auto_submit_login.get())
+            if hasattr(self, 'var_car_auto_mileage'):
+                self.config["car_auto_mileage"] = bool(self.var_car_auto_mileage.get())
             if hasattr(self, 'entry_roster_path'):
                 self.config["roster_path"] = self.entry_roster_path.get().strip()
             if hasattr(self, 'entry_update_dir'):
@@ -6266,6 +6556,14 @@ class VideoBackupApp:
         )
         self.btn_car_login.pack(side="left", ipadx=6, ipady=4, padx=(0, 6))
 
+        self.btn_car_mileage = ttk.Button(
+            f_car_top,
+            text=f"🚑 一鍵里程登記 ({self.config.get('car_target_license', DEFAULT_CAR_TARGET_LICENSE)})",
+            style="Action.TButton",
+            command=self.on_click_car_mileage_shortcut
+        )
+        self.btn_car_mileage.pack(side="left", ipadx=6, ipady=4, padx=(0, 6))
+
         ttk.Button(
             f_car_top,
             text="💓 立即發送心跳",
@@ -6333,6 +6631,33 @@ class VideoBackupApp:
             text="💓 登入後自動進行背景心跳運作（每 3 分鐘靜默發送保活封包，防止公務電腦閒置登出、不搶焦點）",
             variable=self.var_car_heartbeat,
             command=self.on_toggle_car_heartbeat
+        ).pack(anchor="w")
+
+        f_car_lic = ttk.Frame(frame_car)
+        f_car_lic.pack(fill="x", pady=2)
+        ttk.Label(f_car_lic, text="里程登記車牌：", width=16).pack(side="left")
+        self.cb_car_target_license = ttk.Combobox(f_car_lic, values=DEFAULT_CAR_LICENSE_PRESETS, width=38)
+        self.cb_car_target_license.set(self.config.get("car_target_license", DEFAULT_CAR_TARGET_LICENSE))
+        self.cb_car_target_license.pack(side="left", padx=4)
+        self.cb_car_target_license.bind("<<ComboboxSelected>>", self.on_car_target_license_changed)
+        ttk.Label(f_car_lic, text="(預設十九甲主力救護車 BVX-0039)", foreground="#666666").pack(side="left", padx=2)
+
+        f_car_auto = ttk.Frame(frame_car)
+        f_car_auto.pack(fill="x", pady=(4, 0))
+        self.var_car_auto_submit_login = tk.BooleanVar(value=self.config.get("car_auto_submit_login", True))
+        ttk.Checkbutton(
+            f_car_auto,
+            text="⚡ 帳密填入後自動點擊「登入」按鈕（全自動化登入免手按）",
+            variable=self.var_car_auto_submit_login,
+            command=self.save_config
+        ).pack(anchor="w")
+
+        self.var_car_auto_mileage = tk.BooleanVar(value=self.config.get("car_auto_mileage", True))
+        ttk.Checkbutton(
+            f_car_auto,
+            text="🚑 登入後自動導向【里程登記】並新增選取救護車 (BVX-0039) 與今天日期",
+            variable=self.var_car_auto_mileage,
+            command=self.save_config
         ).pack(anchor="w")
 
         frame_roster = ttk.LabelFrame(parent, text="【當月勤務表設定】(依出勤時段快速自動帶入同仁姓名)", padding=10)
@@ -6567,6 +6892,20 @@ class VideoBackupApp:
     def on_car_account_selected(self, event=None):
         self.save_config()
 
+    def get_car_target_license(self) -> str:
+        if hasattr(self, 'cb_car_target_license'):
+            val = self.cb_car_target_license.get().strip()
+            if val:
+                return val
+        return (self.config.get("car_target_license") or DEFAULT_CAR_TARGET_LICENSE).strip()
+
+    def on_car_target_license_changed(self, event=None):
+        lic = self.get_car_target_license()
+        self.config["car_target_license"] = lic
+        if hasattr(self, 'btn_car_mileage'):
+            self.btn_car_mileage.config(text=f"🚑 一鍵里程登記 ({lic})")
+        self.save_config()
+
     def on_switch_car_account_clicked(self):
         """點擊「⚡ 切換並帶入此帳號」：立即切換優先帶入之同仁帳號並開啟/重新載入車輛系統登入頁"""
         self.save_config()
@@ -6616,9 +6955,67 @@ class VideoBackupApp:
             self.cb_car_chrome_profile.set(self.find_car_profile_display(cur_prof))
         self.refresh_car_accounts_list()
 
+    def on_click_car_mileage_shortcut(self):
+        """點擊「🚑 一鍵里程登記 (BVX-0039)」：全自動啟動受控 Chrome、自動登入、自動切換至里程登記、自動點擊添加新記錄並預選車牌與今日日期"""
+        self.save_config()
+        self.car_mileage_flow_active = True
+        self.car_mileage_flow_completed = False
+        prof = self.get_selected_car_chrome_profile()
+        target_url = self.get_selected_car_url()
+        pref_acct = self.get_selected_car_account()
+        target_lic = self.get_car_target_license()
+        disp_name = self.find_car_profile_display(prof)
+
+        if hasattr(self, 'lbl_car_status'):
+            self.lbl_car_status.config(
+                text=f"🚑 正在為您啟動【車輛里程登記 (車號 {target_lic})】全自動流程，請稍候...",
+                foreground="#0D47A1"
+            )
+            self.root.update_idletasks()
+
+        def _worker():
+            force_restart = bool(
+                self.car_cdp.is_running()
+                and pref_acct
+                and pref_acct not in self.car_cdp._decrypted_car_creds
+            )
+            ok = self.car_cdp.launch_or_activate(
+                target_url,
+                profile_name=prof,
+                preferred_account=pref_acct,
+                force_restart=force_restart,
+            )
+            if ok:
+                self.car_cdp.activate_window(target_url)
+                # 若已經在登入狀態，立即嘗試觸發里程填表
+                has_tab, is_logged_in, is_login_page, _, _ = self.car_cdp.check_car_login_state(target_url)
+                if is_logged_in and not is_login_page:
+                    m_res = self.car_cdp.assist_car_mileage_flow(target_url=target_url, target_license=target_lic)
+                    if isinstance(m_res, str) and m_res.startswith("SUCCESS_FILLED"):
+                        self.car_mileage_flow_completed = True
+                        self.car_mileage_flow_active = False
+                        parts = m_res.split(":")
+                        l_val = parts[1] if len(parts) > 1 else target_lic
+                        d_val = parts[2] if len(parts) > 2 else ""
+                        self.root.after(0, lambda: self._on_mileage_flow_success_ui(l_val, d_val))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_mileage_flow_success_ui(self, lic_str: str, date_str: str):
+        if hasattr(self, 'lbl_car_status'):
+            self.lbl_car_status.config(
+                text=f"🟢 里程登記就緒 ｜ 🚑 已自動添加【{lic_str}】記錄（日期已選今日 {date_str}，請填寫出勤里程後按儲存）",
+                foreground="#2E7D32"
+            )
+
     def on_click_car_system_login(self):
         """點擊「🚗 車輛系統登入」：啟動或喚醒綁定分隊 Chrome 設定檔的受控 Chrome 並開啟車輛管理系統"""
         self.save_config()
+        if hasattr(self, 'var_car_auto_mileage') and self.var_car_auto_mileage.get():
+            self.car_mileage_flow_active = True
+            self.car_mileage_flow_completed = False
+        else:
+            self.car_mileage_flow_active = False
         prof = self.get_selected_car_chrome_profile()
         target_url = self.get_selected_car_url()
         pref_acct = self.get_selected_car_account()
@@ -6631,10 +7028,12 @@ class VideoBackupApp:
         ):
             self.car_cdp.ensure_car_tab(target_url)
             if pref_acct and pref_acct in self.car_cdp._decrypted_car_creds:
+                auto_sub = self.var_car_auto_submit_login.get() if hasattr(self, 'var_car_auto_submit_login') else True
                 self.car_cdp.assist_car_login_page(
                     target_url=target_url,
                     preferred_account=pref_acct,
                     force_fill_account=pref_acct,
+                    auto_submit=auto_sub,
                 )
             self.car_cdp.activate_window(target_url)
             has_tab, is_logged_in, _, _, _ = self.car_cdp.check_car_login_state(target_url)
@@ -6820,9 +7219,11 @@ class VideoBackupApp:
                     has_tab, is_logged_in, is_login_page, tab_title, tab_url = self.car_cdp.check_car_login_state(target_url)
                     if has_tab and is_login_page:
                         pref_acct = self.get_selected_car_account()
+                        auto_sub = self.var_car_auto_submit_login.get() if hasattr(self, 'var_car_auto_submit_login') else True
                         assist_res = self.car_cdp.assist_car_login_page(
                             target_url=target_url,
                             preferred_account=pref_acct,
+                            auto_submit=auto_sub,
                         )
                         if isinstance(assist_res, str) and assist_res.startswith("SWITCH:"):
                             new_acct = assist_res.split("SWITCH:", 1)[1].strip()
@@ -6836,6 +7237,25 @@ class VideoBackupApp:
                                     preferred_account=new_acct,
                                     force_restart=force_restart,
                                 )
+                    elif has_tab and is_logged_in and not is_login_page:
+                        should_run_mileage = (
+                            getattr(self, 'car_mileage_flow_active', False)
+                            or (hasattr(self, 'var_car_auto_mileage') and self.var_car_auto_mileage.get())
+                        )
+                        if should_run_mileage and not getattr(self, 'car_mileage_flow_completed', False):
+                            target_lic = self.get_car_target_license()
+                            m_res = self.car_cdp.assist_car_mileage_flow(
+                                target_url=target_url,
+                                target_license=target_lic,
+                            )
+                            if isinstance(m_res, str) and m_res.startswith("SUCCESS_FILLED"):
+                                self.car_mileage_flow_completed = True
+                                self.car_mileage_flow_active = False
+                                parts = m_res.split(":")
+                                l_val = parts[1] if len(parts) > 1 else target_lic
+                                d_val = parts[2] if len(parts) > 2 else ""
+                                self.root.after(0, lambda l=l_val, d=d_val: self._on_mileage_flow_success_ui(l, d))
+
                     hb_enabled = self.var_car_heartbeat.get() if hasattr(self, 'var_car_heartbeat') else True
                     if hb_enabled and has_tab and is_logged_in:
                         now_t = time.time()
@@ -6853,6 +7273,10 @@ class VideoBackupApp:
             return
         active_prof = self.car_cdp.get_active_profile_mode()
         sel_prof = self.get_selected_car_chrome_profile()
+        target_lic = self.get_car_target_license()
+
+        if hasattr(self, 'btn_car_mileage'):
+            self.btn_car_mileage.config(text=f"🚑 一鍵里程登記 ({target_lic})")
 
         if not is_online:
             self.btn_car_login.config(text="🚗 車輛系統登入")
@@ -6867,14 +7291,26 @@ class VideoBackupApp:
                 hb_enabled = self.var_car_heartbeat.get() if hasattr(self, 'var_car_heartbeat') else True
                 hb_info = f"💓 背景心跳運作中 (最後發送: {self.last_car_heartbeat_str})" if hb_enabled else "⏸️ 背景心跳已暫停"
                 self.btn_car_login.config(text="👁️ 喚醒車輛系統視窗")
-                self.lbl_car_status.config(
-                    text=f"🟢 車輛系統已登入 [{active_prof}] ｜ {hb_info}",
-                    foreground="#2E7D32"
-                )
+                if getattr(self, 'car_mileage_flow_completed', False):
+                    self.lbl_car_status.config(
+                        text=f"🟢 里程登記就緒 ｜ 🚑 已自動添加【{target_lic}】（日期已選今日，請填寫出勤里程後按儲存）",
+                        foreground="#2E7D32"
+                    )
+                elif getattr(self, 'car_mileage_flow_active', False):
+                    self.lbl_car_status.config(
+                        text=f"⏳ 正在為您自動導向【里程登記】並新增選取 {target_lic} 與今日日期...",
+                        foreground="#0D47A1"
+                    )
+                else:
+                    self.lbl_car_status.config(
+                        text=f"🟢 車輛系統已登入 [{active_prof}] ｜ {hb_info}",
+                        foreground="#2E7D32"
+                    )
             else:
                 self.btn_car_login.config(text="🔑 前往完成車輛登入")
+                auto_sub_hint = "（已啟用帳密自動填寫 ＆ 自動登入）" if (hasattr(self, 'var_car_auto_submit_login') and self.var_car_auto_submit_login.get()) else "（等待手動登入）"
                 self.lbl_car_status.config(
-                    text=f"🟡 車輛系統已開啟 [{active_prof}]：等待登入中（請在 Chrome 視窗登入，登入後自動啟動背景心跳）",
+                    text=f"🟡 車輛系統已開啟 [{active_prof}]：{auto_sub_hint}，登入後自動轉至【{target_lic} 里程登記】",
                     foreground="#E65100"
                 )
         else:
