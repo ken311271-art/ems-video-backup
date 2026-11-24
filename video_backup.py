@@ -35,6 +35,7 @@ CONFIG_FILE = os.path.join(APP_DIR, "backup_config.json")
 
 DEFAULT_CAR_CHROME_EMAIL = "AUTO"
 DEFAULT_CAR_SYSTEM_URL = "http://car.tccf.gov.tw/car/"
+DEFAULT_NFA119_LOGIN_URL = "http://10.19.7.62/nfa119/login119"
 CAR_SYSTEM_URL_PRESETS = [
     "http://car.tccf.gov.tw/car/",
     "http://car.fire.taichung.gov.tw/car/login.php",
@@ -1231,7 +1232,7 @@ def activate_chrome_window():
 def open_chrome_url(url: str, profile_dir: str = None, ext_dir: str = None):
     """使用日常原生 Chrome 與指定設定檔開啟網址（支援掛載小幫手專用原生擴充套件）"""
     prof = resolve_chrome_profile(profile_dir) if profile_dir else find_chrome_profile_for_user()
-    insecure_flag = "--unsafely-treat-insecure-origin-as-secure=http://car.tccf.gov.tw,http://car.fire.taichung.gov.tw,http://inside.fire.taichung.gov.tw,http://fixnew.fire.taichung.gov.tw,http://training.fire.taichung.gov.tw"
+    insecure_flag = "--unsafely-treat-insecure-origin-as-secure=http://car.tccf.gov.tw,http://car.fire.taichung.gov.tw,http://inside.fire.taichung.gov.tw,http://fixnew.fire.taichung.gov.tw,http://training.fire.taichung.gov.tw,http://10.19.7.62"
     extra_args = []
     if ext_dir and os.path.exists(ext_dir):
         extra_args.extend([f"--load-extension={ext_dir}", f"--disable-extensions-except={ext_dir}"])
@@ -2586,6 +2587,24 @@ class VehicleCDPController:
                                 )
 
                         conn.commit()
+
+                    # 確保 119 系統 (10.19.7.62) 已儲存於設定檔的帳號密碼同樣保持啟用，讓 Chrome 原生自動帶入帳密
+                    try:
+                        now_webkit_119 = int(time.time() * 1000000) + 11644473600000000
+                        conn.execute(
+                            """
+                            UPDATE main.logins
+                            SET blacklisted_by_user = 0,
+                                times_used = CASE WHEN times_used IS NULL OR times_used < 1 THEN 1 ELSE times_used END,
+                                date_last_used = CASE WHEN date_last_used IS NULL OR date_last_used < 1000 THEN ? ELSE date_last_used END
+                            WHERE (origin_url LIKE '%10.19.7.62%' OR signon_realm LIKE '%10.19.7.62%')
+                            AND username_value != ''
+                            """,
+                            (now_webkit_119 - 86400000000,),
+                        )
+                        conn.commit()
+                    except Exception:
+                        pass
             finally:
                 conn.close()
 
@@ -2654,6 +2673,7 @@ class VehicleCDPController:
             car_bookmarks = [
                 ("🚗 車輛管理系統", "http://car.tccf.gov.tw/car/"),
                 ("🚑 一鍵里程登記(BVX-0039)", "javascript:" + build_car_mileage_bookmarklet()),
+                ("🚒 119 系統登入", DEFAULT_NFA119_LOGIN_URL),
                 ("🚒 裝備器材系統", "https://fems.taichung.gov.tw/HPG01000/Index"),
                 ("💓 車輛系統心跳保活", "javascript:" + build_car_heartbeat_bookmarklet()),
             ]
@@ -2787,6 +2807,7 @@ class VehicleCDPController:
             "http://inside.fire.taichung.gov.tw",
             "http://fixnew.fire.taichung.gov.tw",
             "http://training.fire.taichung.gov.tw",
+            "http://10.19.7.62",
         ]
         if target_url:
             try:
@@ -2895,6 +2916,94 @@ class VehicleCDPController:
         for _ in range(25):
             time.sleep(0.3)
             if self.is_running():
+                return True
+        return False
+
+    def open_nfa119_login(
+        self,
+        login_url: str = DEFAULT_NFA119_LOGIN_URL,
+        profile_name: str = None,
+        preferred_account: str = "",
+    ) -> bool:
+        """
+        沿用目前分隊 Chrome 設定檔與已同步密碼庫開啟 119 系統登入頁 (http://10.19.7.62/nfa119/login119)：
+        - 已啟用純 HTTP 安全來源白名單，Chrome 原生密碼管理員會自動帶入設定檔中儲存的帳號與密碼
+        - 若受控 Chrome 已執行，直接聚焦既有 119 分頁或開啟新分頁
+        - 驗證碼與登入送出保留由同仁於開啟的瀏覽器畫面中親自完成
+        """
+        nav_url = (login_url or DEFAULT_NFA119_LOGIN_URL).strip()
+        prof = resolve_chrome_profile(profile_name) if profile_name else find_chrome_profile_for_user()
+        is_clean_mode = (prof == "NONE")
+        prof_subdir = "CAR_Clean_Sandbox" if is_clean_mode else prof
+        target_user_data_dir = self.get_isolated_user_data_dir(prof_subdir, is_clean_mode=is_clean_mode)
+
+        if self.is_running() and self.get_active_profile_mode() == prof:
+            # 尋找是否已開啟 119 系統分頁
+            target_tab = None
+            for t in self.get_page_tabs():
+                u = (t.get("url", "") or "").lower()
+                if "10.19.7.62" in u or "/nfa119/" in u:
+                    target_tab = t
+                    break
+            if not target_tab:
+                try:
+                    encoded_u = urllib.parse.quote(nav_url, safe=":/?&=#")
+                    req = urllib.request.Request(f"http://127.0.0.1:{self.port}/json/new?{encoded_u}", method="PUT")
+                    with self._local_http_open(req, timeout=2.5) as resp:
+                        target_tab = json.loads(resp.read().decode("utf-8"))
+                        time.sleep(0.4)
+                except Exception:
+                    page_tabs = self.get_page_tabs()
+                    if page_tabs and page_tabs[0].get("webSocketDebuggerUrl"):
+                        self._ws_eval(page_tabs[0]["webSocketDebuggerUrl"], f"window.open({json.dumps(nav_url)}, '_blank'); 'OPEN'", timeout=2.5)
+                        time.sleep(0.5)
+            if target_tab and "id" in target_tab:
+                try:
+                    self._local_http_open(f"http://127.0.0.1:{self.port}/json/activate/{target_tab['id']}", timeout=1.5)
+                except Exception:
+                    pass
+            activate_chrome_window()
+            return True
+
+        if self.is_running():
+            self.close_browser()
+
+        pref_acct = (preferred_account or "").strip()
+        if pref_acct.startswith("⚡") or pref_acct.upper() == "AUTO":
+            pref_acct = ""
+
+        self.active_profile_subdir = prof_subdir
+        self._write_saved_active_mode(prof)
+        if not is_clean_mode:
+            self.sync_from_system_profile(
+                prof_subdir,
+                preferred_account=pref_acct,
+                target_url=nav_url,
+            )
+        self.setup_profile_bookmarks(prof_subdir, is_clean_mode=is_clean_mode)
+
+        cmd = [
+            get_chrome_executable(),
+            f"--user-data-dir={target_user_data_dir}",
+            f"--profile-directory={prof_subdir}",
+            f"--remote-debugging-port={self.port}",
+            "--remote-debugging-address=127.0.0.1",
+            "--remote-allow-origins=*",
+            self._build_insecure_origins_flag(nav_url),
+            "--no-first-run",
+            "--no-default-browser-check",
+            nav_url,
+        ]
+        try:
+            self.process = subprocess.Popen(cmd)
+        except Exception as e:
+            print("Failed to launch Chrome for NFA119 login:", e)
+            return False
+
+        for _ in range(25):
+            time.sleep(0.3)
+            if self.is_running():
+                activate_chrome_window()
                 return True
         return False
 
@@ -7274,6 +7383,13 @@ class VideoBackupApp:
 
         ttk.Button(
             f_car_top,
+            text="🚒 開啟 119 系統登入",
+            style="Action.TButton",
+            command=self.on_click_open_nfa119_login
+        ).pack(side="left", ipadx=6, ipady=5, padx=(0, 6))
+
+        ttk.Button(
+            f_car_top,
             text="👁️ 喚醒視窗 / 重試",
             command=self.on_click_wake_car_browser
         ).pack(side="left", ipady=3, padx=2)
@@ -7762,6 +7878,39 @@ class VideoBackupApp:
         self.car_mileage_flow_completed = False
         self.car_cdp.activate_window(target_url)
         threading.Thread(target=lambda: self.car_cdp.assist_car_mileage_flow(target_url=target_url, target_license=target_lic), daemon=True).start()
+
+    def on_click_open_nfa119_login(self):
+        """點擊「🚒 開啟 119 系統登入」：沿用目前綁定的分隊 Chrome 設定檔與密碼庫開啟 119 登入頁（驗證碼由同仁手動輸入）"""
+        self.save_config()
+        prof = self.get_selected_car_chrome_profile()
+        pref_acct = self.get_selected_car_account()
+        disp_name = self.find_car_profile_display(prof)
+
+        if hasattr(self, 'lbl_car_status'):
+            self.lbl_car_status.config(
+                text=f"🚒 正在以設定檔 [{disp_name}] 開啟 119 系統登入頁（已啟用帳密自動帶入），請稍候...",
+                foreground="#0D47A1"
+            )
+            self.root.update_idletasks()
+
+        def _nfa119_worker():
+            ok = self.car_cdp.open_nfa119_login(
+                login_url=DEFAULT_NFA119_LOGIN_URL,
+                profile_name=prof,
+                preferred_account=pref_acct,
+            )
+            if not ok:
+                open_chrome_url(DEFAULT_NFA119_LOGIN_URL, prof)
+            self.root.after(0, lambda: self._after_nfa119_opened(ok, disp_name))
+
+        threading.Thread(target=_nfa119_worker, daemon=True).start()
+
+    def _after_nfa119_opened(self, ok: bool, disp_name: str):
+        if hasattr(self, 'lbl_car_status'):
+            self.lbl_car_status.config(
+                text=f"🚒 已開啟 119 系統登入頁 [{disp_name}]（帳號密碼沿用 Chrome 設定檔自動帶入，請於網頁手動輸入驗證碼登入）",
+                foreground="#2E7D32"
+            )
 
     def on_click_car_mileage_shortcut(self):
         """點擊「🚑 一鍵里程登記 (BVX-0039)」：全自動啟動受控 Chrome、自動登入、自動切換至里程登記、自動點擊添加新記錄並預選車牌與今日日期"""
