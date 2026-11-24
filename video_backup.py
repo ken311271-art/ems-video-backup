@@ -1228,17 +1228,21 @@ def activate_chrome_window():
             pass
 
 
-def open_chrome_url(url: str, profile_dir: str = None):
-    """使用日常原生 Chrome 與指定設定檔開啟網址"""
+def open_chrome_url(url: str, profile_dir: str = None, ext_dir: str = None):
+    """使用日常原生 Chrome 與指定設定檔開啟網址（支援掛載小幫手專用原生擴充套件）"""
     prof = resolve_chrome_profile(profile_dir) if profile_dir else find_chrome_profile_for_user()
     insecure_flag = "--unsafely-treat-insecure-origin-as-secure=http://car.tccf.gov.tw,http://car.fire.taichung.gov.tw,http://inside.fire.taichung.gov.tw,http://fixnew.fire.taichung.gov.tw,http://training.fire.taichung.gov.tw"
+    extra_args = []
+    if ext_dir and os.path.exists(ext_dir):
+        extra_args.extend([f"--load-extension={ext_dir}", f"--disable-extensions-except={ext_dir}"])
+
     if prof == "NONE":
         if sys.platform == "darwin":
-            subprocess.Popen(["open", "-a", "Google Chrome", url, "--args", insecure_flag])
+            subprocess.Popen(["open", "-a", "Google Chrome", url, "--args", insecure_flag] + extra_args)
         elif sys.platform.startswith("win"):
             exe = get_chrome_executable()
             if os.path.exists(exe):
-                subprocess.Popen([exe, insecure_flag, url])
+                subprocess.Popen([exe, insecure_flag] + extra_args + [url])
             else:
                 try:
                     subprocess.Popen(f'start chrome "{url}"', shell=True)
@@ -1252,11 +1256,11 @@ def open_chrome_url(url: str, profile_dir: str = None):
         subprocess.Popen([
             "open", "-a", "Google Chrome", url,
             "--args", f"--profile-directory={prof}", insecure_flag
-        ])
+        ] + extra_args)
     elif sys.platform.startswith("win"):
         exe = get_chrome_executable()
         if os.path.exists(exe):
-            subprocess.Popen([exe, f"--profile-directory={prof}", insecure_flag, url])
+            subprocess.Popen([exe, f"--profile-directory={prof}", insecure_flag] + extra_args + [url])
         else:
             try:
                 subprocess.Popen(f'start chrome --profile-directory="{prof}" {insecure_flag} "{url}"', shell=True)
@@ -1376,11 +1380,334 @@ def build_car_mileage_bookmarklet(target_license: str = DEFAULT_CAR_TARGET_LICEN
 
 class VehicleCDPController:
     """
-    車輛系統專用受控瀏覽器管理器 (Chrome DevTools Protocol)
+    車輛系統專用受控瀏覽器管理器 (Chrome DevTools Protocol & 原生本地擴充套件雙軌雙保險架構)
+    - 雙軌雙保險：結合 Chrome 原生本地擴充套件 (Content Script) 與本機 CDP 控制埠 9223，保證 100% 免手動登入與導向
     - 採用獨立 Port 9223 與本機 AppData 隔離區，與日常 Chrome 及人事差勤助手 (Port 9222) 完全共存不衝突
     - 自動尋找並同步掛載分隊 Chrome 設定檔的雲端書籤與雲端密碼庫 (Login Data For Account)
     - 透過原生 socket RFC 6455 WebSocket 雙向協議在背景靜默發送防斷線心跳，100% 零第三方套件依賴
     """
+    @classmethod
+    def _local_http_open(cls, req_or_url, timeout: float = 2.0):
+        """保證 100% 繞過任何 Windows 系統 Proxy / PAC / VPN / 環境變數直連 127.0.0.1 本機除錯埠"""
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return opener.open(req_or_url, timeout=timeout)
+
+    def ensure_car_helper_extension(
+        self,
+        target_url: str = DEFAULT_CAR_SYSTEM_URL,
+        target_license: str = DEFAULT_CAR_TARGET_LICENSE,
+        preferred_account: str = "",
+        auto_submit: bool = True,
+        auto_mileage: bool = True,
+    ) -> str:
+        """
+        建立或動態更新車輛管理系統專用之 Chrome 原生本地擴充套件 (Manifest V3)：
+        - 完全由 Chrome 內核 Content Script 原生驅動，0 延遲、免 WebSocket、不受任何本機 Proxy 或除錯埠限制
+        - 登入頁：自動填入帳密並全自動四重點擊「登入」
+        - 登入後：自動偵測並秒級跳轉至 http://car.tccf.gov.tw/car/pages/mileage_nw.php (里程登記)
+        - 里程頁：自動點擊「添加新記錄」圖片按鈕、自動選取目標車牌 (BVX-0039)、自動選取今日日期，並顯示完成綠色橫幅
+        - 全時段：常駐每 3 分鐘背景心跳保活
+        """
+        ext_dir = os.path.join(self.profile_dir, "car_helper_extension")
+        try:
+            os.makedirs(ext_dir, exist_ok=True)
+            manifest_path = os.path.join(ext_dir, "manifest.json")
+            content_path = os.path.join(ext_dir, "content.js")
+
+            manifest_data = {
+                "manifest_version": 3,
+                "name": "車輛系統自動登記小幫手",
+                "version": "1.3",
+                "description": "救護影像抓取小幫手專用：車輛系統自動登入與里程登記輔助",
+                "content_scripts": [
+                    {
+                        "matches": ["http://*/*"],
+                        "js": ["content.js"],
+                        "run_at": "document_end",
+                        "all_frames": True,
+                    }
+                ],
+            }
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest_data, f, ensure_ascii=False, indent=2)
+
+            pref_clean = (preferred_account or self.active_preferred_account or "").strip()
+            if pref_clean.startswith("⚡") or pref_clean.upper() == "AUTO":
+                pref_clean = ""
+
+            direct_user = ""
+            direct_pass = ""
+            if pref_clean and pref_clean in self._decrypted_car_creds:
+                direct_user = pref_clean
+                direct_pass = self._decrypted_car_creds[pref_clean]
+            elif self._decrypted_car_creds:
+                direct_user = list(self._decrypted_car_creds.keys())[0]
+                direct_pass = self._decrypted_car_creds[direct_user]
+
+            mileage_url = get_car_mileage_url(target_url)
+            cfg_obj = {
+                "target_url": target_url or DEFAULT_CAR_SYSTEM_URL,
+                "mileage_url": mileage_url,
+                "target_license": (target_license or DEFAULT_CAR_TARGET_LICENSE).strip(),
+                "preferred_account": pref_clean,
+                "direct_user": direct_user,
+                "direct_pass": direct_pass,
+                "auto_submit": bool(auto_submit),
+                "auto_mileage": bool(auto_mileage),
+            }
+            cfg_json = json.dumps(cfg_obj, ensure_ascii=False)
+
+            content_js_code = f"""(function() {{
+    var host = (window.location.hostname || '').toLowerCase();
+    var href = (window.location.href || '').toLowerCase();
+    if (
+        host.indexOf('car.tccf.gov.tw') === -1 &&
+        host.indexOf('car.fire.taichung.gov.tw') === -1 &&
+        href.indexOf('/car/') === -1
+    ) {{
+        return;
+    }}
+
+    var CFG = {cfg_json};
+
+    function checkIsLoginPage() {{
+        var pw = document.querySelector('input[name="rt_admin_password"], input[type="password"]');
+        if (pw && (pw.offsetParent !== null || pw.offsetWidth > 0 || pw.offsetHeight > 0)) return true;
+        if (href.indexOf('login.php') !== -1 || href.indexOf('/account/login') !== -1) return true;
+        return false;
+    }}
+
+    function runAutomation() {{
+        var isLogin = checkIsLoginPage();
+        if (isLogin) {{
+            handleLoginPage();
+        }} else {{
+            handleSystemPage();
+        }}
+    }}
+
+    function handleLoginPage() {{
+        var u = document.querySelector('input[name="rt_admin_username"], input[type="text"]');
+        var p = document.querySelector('input[name="rt_admin_password"], input[type="password"]');
+        if (!u && !p) return;
+
+        if (CFG.direct_user && CFG.direct_pass) {{
+            if (u && !u.value) {{
+                u.value = CFG.direct_user;
+                u.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                u.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            }}
+            if (p && !p.value) {{
+                p.value = CFG.direct_pass;
+                p.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                p.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            }}
+        }}
+
+        var bar = document.getElementById('__car_ext_banner');
+        if (!bar) {{
+            bar = document.createElement('div');
+            bar.id = '__car_ext_banner';
+            bar.style.cssText = 'position:fixed;top:0;left:0;right:0;background:linear-gradient(90deg,#0f172a,#1e3a8a);color:#f8fafc;padding:9px 16px;font-size:13px;z-index:999999;box-shadow:0 3px 12px rgba(0,0,0,0.3);font-family:sans-serif;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #38bdf8;';
+            (document.body || document.documentElement).appendChild(bar);
+            if (document.body) document.body.style.paddingTop = '48px';
+        }}
+
+        if (CFG.auto_submit) {{
+            bar.innerHTML = '<div style="display:flex;align-items:center;gap:8px;font-weight:bold;"><span style="font-size:16px">🚀</span> <span>【救護小幫手】已就緒！正在全自動為您點擊「登入」...</span></div><div style="font-size:12px;color:#7dd3fc">登入後自動切換至里程登記</div>';
+
+            var attempts = 0;
+            var subTimer = setInterval(function() {{
+                attempts++;
+                var uVal = u ? (u.value || '').trim() : '';
+                var pVal = p ? (p.value || '').trim() : '';
+                var isFilled = Boolean(uVal && (pVal || (p && p.matches && p.matches(':-webkit-autofill'))));
+
+                if (isFilled || attempts >= 4) {{
+                    clearInterval(subTimer);
+                    submitLoginForm(u, p);
+                }}
+            }}, 250);
+        }} else {{
+            bar.innerHTML = '<div style="display:flex;align-items:center;gap:8px;font-weight:bold;"><span style="font-size:16px">🔑</span> <span>【救護小幫手】車輛系統已就緒，請點擊「登入」完成登入。</span></div>';
+        }}
+    }}
+
+    function submitLoginForm(u, p) {{
+        try {{ if (u) {{ u.focus(); u.dispatchEvent(new Event('input', {{ bubbles: true }})); u.dispatchEvent(new Event('change', {{ bubbles: true }})); }} }} catch(e){{}}
+        try {{ if (p) {{ p.focus(); p.dispatchEvent(new Event('input', {{ bubbles: true }})); p.dispatchEvent(new Event('change', {{ bubbles: true }})); }} }} catch(e){{}}
+        try {{ if (typeof rememberMe === 'function') rememberMe(); }} catch(e){{}}
+
+        var subBtn = document.querySelector('input[name="Submit"], input[type="submit"][value*="登入"], input.ConWebButton, button[type="submit"]');
+        if (subBtn) {{
+            try {{ subBtn.focus(); }} catch(e){{}}
+            try {{
+                var clickEvt = new MouseEvent('click', {{ bubbles: true, cancelable: true, view: window }});
+                subBtn.dispatchEvent(clickEvt);
+            }} catch(e){{}}
+            try {{ subBtn.click(); }} catch(e){{}}
+        }}
+
+        try {{
+            var f = document.forms['frmLogin'] || (subBtn && subBtn.form) || document.querySelector('form');
+            if (f) {{
+                var ok = true;
+                if (typeof onSubmitCheck === 'function') ok = onSubmitCheck(f, false, false);
+                if (ok !== false) {{
+                    HTMLFormElement.prototype.submit.call(f);
+                }}
+            }}
+        }} catch(e){{}}
+    }}
+
+    function handleSystemPage() {{
+        initHeartbeatPill();
+
+        if (CFG.auto_mileage) {{
+            if (href.indexOf('mileage_nw.php') === -1) {{
+                var navBar = document.getElementById('__car_ext_nav_bar');
+                if (!navBar) {{
+                    navBar = document.createElement('div');
+                    navBar.id = '__car_ext_nav_bar';
+                    navBar.style.cssText = 'position:fixed;top:0;left:0;right:0;background:linear-gradient(90deg,#047857,#065f46);color:#ffffff;padding:10px 18px;font-size:14px;font-weight:bold;z-index:999999;box-shadow:0 4px 14px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #34d399;font-family:sans-serif;';
+                    navBar.innerHTML = '<span>🚑 <strong>【救護小幫手】登入成功！正在為您自動導向【里程登記】...</strong></span>';
+                    (document.body || document.documentElement).appendChild(navBar);
+                    if (document.body) document.body.style.paddingTop = '50px';
+                }}
+                setTimeout(function() {{
+                    window.location.href = CFG.mileage_url || (window.location.origin + '/car/pages/mileage_nw.php');
+                }}, 250);
+                return;
+            }}
+
+            handleMileagePage();
+        }}
+    }}
+
+    function handleMileagePage() {{
+        var mAttempts = 0;
+        function checkMileageForm() {{
+            mAttempts++;
+            var selLic = document.getElementById('ryylicense') || document.querySelector('select[name="ryylicense"]');
+            if (!selLic) {{
+                var addBtn = document.querySelector('img[title="添加新記錄"], img[alt="添加新記錄"], img[src*="add.gif"], img[onclick*="dr5__doPostBack"][onclick*="add"]');
+                if (addBtn) {{
+                    addBtn.click();
+                }} else if (typeof window.dr5__doPostBack === 'function') {{
+                    window.dr5__doPostBack('add', '-1', '');
+                }}
+                if (mAttempts < 30) {{
+                    setTimeout(checkMileageForm, 300);
+                }}
+                return;
+            }}
+
+            var targetLic = (CFG.target_license || 'BVX-0039').trim();
+            var matchedLic = '';
+            for (var i = 0; i < selLic.options.length; i++) {{
+                var opt = selLic.options[i];
+                if (opt.value.indexOf(targetLic) !== -1 || opt.text.indexOf(targetLic) !== -1) {{
+                    selLic.selectedIndex = i;
+                    selLic.value = opt.value;
+                    matchedLic = opt.value;
+                    break;
+                }}
+            }}
+            if (matchedLic) {{
+                selLic.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                if (typeof window.search_car_mileage === 'function') {{
+                    try {{ window.search_car_mileage(matchedLic); }} catch(e){{}}
+                }}
+            }}
+
+            var selDate = document.getElementById('ryymdate') || document.querySelector('select[name="ryymdate"]');
+            var now = new Date();
+            var yyyy = now.getFullYear();
+            var mm = String(now.getMonth() + 1).padStart(2, '0');
+            var dd = String(now.getDate()).padStart(2, '0');
+            var todayStr = yyyy + '-' + mm + '-' + dd;
+            var matchedDate = '';
+            if (selDate) {{
+                for (var j = 0; j < selDate.options.length; j++) {{
+                    var dOpt = selDate.options[j];
+                    if (dOpt.value === todayStr || dOpt.text.indexOf(todayStr) !== -1) {{
+                        selDate.selectedIndex = j;
+                        selDate.value = dOpt.value;
+                        matchedDate = dOpt.value;
+                        break;
+                    }}
+                }}
+                if (!matchedDate && selDate.options.length > 1) {{
+                    for (var k = 0; k < selDate.options.length; k++) {{
+                        if (selDate.options[k].value) {{
+                            selDate.selectedIndex = k;
+                            selDate.value = selDate.options[k].value;
+                            matchedDate = selDate.options[k].value;
+                            break;
+                        }}
+                    }}
+                }}
+                selDate.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            }}
+
+            var doneBar = document.getElementById('__car_ext_done_bar');
+            if (!doneBar) {{
+                doneBar = document.createElement('div');
+                doneBar.id = '__car_ext_done_bar';
+                doneBar.style.cssText = 'position:fixed;top:0;left:0;right:0;background:linear-gradient(90deg,#065f46,#047857);color:#ffffff;padding:12px 20px;font-size:14px;font-weight:bold;z-index:999999;box-shadow:0 4px 16px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:space-between;border-bottom:3px solid #34d399;font-family:sans-serif;';
+                doneBar.innerHTML = '<span>🚑 <strong>【救護小幫手】已為您自動添加新記錄 ＆ 預選車牌【' + (matchedLic || targetLic) + '】與今日日期【' + (matchedDate || todayStr) + '】！</strong><br><span style="font-size:12px;font-weight:normal;color:#a7f3d0">👉 請接續輸入今日出勤里程並按儲存。</span></span><button onclick="this.parentElement.remove();" style="background:#059669;color:#fff;border:1px solid #6ee7b7;border-radius:4px;padding:4px 10px;cursor:pointer;font-weight:bold;">關閉提示 ✕</button>';
+                (document.body || document.documentElement).appendChild(doneBar);
+                if (document.body) document.body.style.paddingTop = '58px';
+            }}
+        }}
+        checkMileageForm();
+    }}
+
+    function initHeartbeatPill() {{
+        function updateBadge(timeStr, color) {{
+            var b = document.getElementById('__car_heartbeat_pill');
+            if (!b) {{
+                b = document.createElement('div');
+                b.id = '__car_heartbeat_pill';
+                b.style.cssText = 'position:fixed;bottom:14px;right:14px;background:rgba(15,23,42,0.88);color:#f8fafc;padding:6px 14px;border-radius:20px;font-size:12px;z-index:999999;box-shadow:0 4px 14px rgba(0,0,0,0.3);font-family:sans-serif;display:flex;align-items:center;gap:8px;backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,0.18);cursor:pointer;user-select:none;';
+                b.title = '車輛系統防斷線背景心跳運作中 (每 3 分鐘自動維持連線)';
+                (document.body || document.documentElement).appendChild(b);
+            }}
+            b.innerHTML = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (color || '#10b981') + ';box-shadow:0 0 6px ' + (color || '#10b981') + '"></span> <strong>車輛系統保活中</strong> <span style="color:#94a3b8;font-size:11px">' + timeStr + '</span>';
+        }}
+
+        function doPing() {{
+            fetch(window.location.href, {{ method: 'GET', cache: 'no-store', credentials: 'include' }})
+                .then(function() {{
+                    updateBadge(new Date().toLocaleTimeString(), '#10b981');
+                }})
+                .catch(function() {{
+                    fetch(window.location.origin + '/car/', {{ method: 'HEAD', cache: 'no-store', credentials: 'include' }})
+                        .then(function() {{ updateBadge(new Date().toLocaleTimeString() + ' (備援)', '#38bdf8'); }})
+                        .catch(function(){{}});
+                }});
+        }}
+
+        if (!window.__car_ext_hb_timer) {{
+            window.__car_ext_hb_timer = setInterval(doPing, 180000);
+            doPing();
+        }}
+    }}
+
+    if (document.readyState === 'loading') {{
+        document.addEventListener('DOMContentLoaded', runAutomation);
+    }} else {{
+        runAutomation();
+    }}
+}})();
+"""
+            with open(content_path, "w", encoding="utf-8") as f:
+                f.write(content_js_code)
+            return ext_dir
+        except Exception as e:
+            print("ensure_car_helper_extension warning:", e)
+            return ""
+
     def __init__(self, port: int = 9223, profile_dir: str = None, initial_url: str = DEFAULT_CAR_SYSTEM_URL):
         self.port = port
         self.profile_dir = profile_dir or get_car_local_secure_profile_root()
@@ -1436,14 +1763,14 @@ class VehicleCDPController:
 
     def is_running(self) -> bool:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json", timeout=1.2) as resp:
+            with self._local_http_open(f"http://127.0.0.1:{self.port}/json", timeout=1.2) as resp:
                 return resp.status == 200
         except Exception:
             return False
 
     def get_tabs(self) -> list:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json", timeout=2.0) as resp:
+            with self._local_http_open(f"http://127.0.0.1:{self.port}/json", timeout=2.0) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except Exception:
             return []
@@ -1495,7 +1822,7 @@ class VehicleCDPController:
                 tid = t.get("id")
                 if tid:
                     try:
-                        urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json/close/{tid}", timeout=1.0)
+                        self._local_http_open(f"http://127.0.0.1:{self.port}/json/close/{tid}", timeout=1.0)
                     except Exception:
                         pass
         if self.process:
@@ -2263,7 +2590,7 @@ class VehicleCDPController:
         try:
             encoded_u = urllib.parse.quote(nav_url, safe=":/?&=#")
             req = urllib.request.Request(f"http://127.0.0.1:{self.port}/json/new?{encoded_u}", method="PUT")
-            with urllib.request.urlopen(req, timeout=2.5) as resp:
+            with self._local_http_open(req, timeout=2.5) as resp:
                 new_tab = json.loads(resp.read().decode("utf-8"))
                 time.sleep(0.5)
                 return new_tab
@@ -2286,7 +2613,7 @@ class VehicleCDPController:
         tab = car_tabs[0] if car_tabs else None
         if tab and "id" in tab:
             try:
-                urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json/activate/{tab['id']}", timeout=1.5)
+                self._local_http_open(f"http://127.0.0.1:{self.port}/json/activate/{tab['id']}", timeout=1.5)
             except Exception:
                 pass
         activate_chrome_window()
@@ -2323,6 +2650,9 @@ class VehicleCDPController:
         profile_name: str = None,
         preferred_account: str = "",
         force_restart: bool = False,
+        target_license: str = DEFAULT_CAR_TARGET_LICENSE,
+        auto_submit: bool = True,
+        auto_mileage: bool = True,
     ) -> bool:
         prof = resolve_chrome_profile(profile_name) if profile_name else find_chrome_profile_for_user()
         is_clean_mode = (prof == "NONE")
@@ -2336,6 +2666,15 @@ class VehicleCDPController:
         # 先掃描設定檔中的車輛系統帳號與可用快取
         if not is_clean_mode:
             self.get_saved_car_accounts(prof_subdir)
+
+        # 預先生成或更新本地擴充套件設定
+        ext_dir = self.ensure_car_helper_extension(
+            target_url=target_url,
+            target_license=target_license,
+            preferred_account=pref_acct,
+            auto_submit=auto_submit,
+            auto_mileage=auto_mileage,
+        )
 
         if self.is_running():
             need_restart = (
@@ -2356,6 +2695,7 @@ class VehicleCDPController:
                         accounts=accts,
                         preferred_account=pref_acct,
                         force_fill_account=pref_acct,
+                        auto_submit=auto_submit,
                     )
                 self.activate_window(target_url)
                 return True
@@ -2377,12 +2717,20 @@ class VehicleCDPController:
             f"--user-data-dir={target_user_data_dir}",
             f"--profile-directory={prof_subdir}",
             f"--remote-debugging-port={self.port}",
+            "--remote-debugging-address=127.0.0.1",
             "--remote-allow-origins=*",
             self._build_insecure_origins_flag(target_url),
+        ]
+        if ext_dir and os.path.exists(ext_dir):
+            cmd.extend([
+                f"--load-extension={ext_dir}",
+                f"--disable-extensions-except={ext_dir}",
+            ])
+        cmd.extend([
             "--no-first-run",
             "--no-default-browser-check",
             target_url or DEFAULT_CAR_SYSTEM_URL,
-        ]
+        ])
         try:
             self.process = subprocess.Popen(cmd)
         except Exception as e:
@@ -7000,11 +7348,17 @@ class VideoBackupApp:
                 and pref_acct
                 and pref_acct not in self.car_cdp._decrypted_car_creds
             )
+            auto_sub = self.var_car_auto_submit_login.get() if hasattr(self, 'var_car_auto_submit_login') else True
+            auto_mil = self.var_car_auto_mileage.get() if hasattr(self, 'var_car_auto_mileage') else True
+            target_lic = self.get_car_target_license()
             ok = self.car_cdp.launch_or_activate(
                 target_url,
                 profile_name=prof,
                 preferred_account=pref_acct,
                 force_restart=force_restart,
+                target_license=target_lic,
+                auto_submit=auto_sub,
+                auto_mileage=auto_mil,
             )
             self.root.after(0, lambda: self._after_car_browser_launched(ok, disp_name, target_url, pref_acct))
 
@@ -7056,17 +7410,19 @@ class VideoBackupApp:
                 profile_name=prof,
                 preferred_account=pref_acct,
                 force_restart=force_restart,
+                target_license=target_lic,
+                auto_submit=True,
+                auto_mileage=True,
             )
             if ok:
                 self.car_cdp.activate_window(target_url)
                 time.sleep(0.6)
                 has_tab, is_logged_in, is_login_page, _, _ = self.car_cdp.check_car_login_state(target_url)
                 if has_tab and is_login_page:
-                    auto_sub = self.var_car_auto_submit_login.get() if hasattr(self, 'var_car_auto_submit_login') else True
                     self.car_cdp.assist_car_login_page(
                         target_url=target_url,
                         preferred_account=pref_acct,
-                        auto_submit=auto_sub,
+                        auto_submit=True,
                     )
                 elif is_logged_in and not is_login_page:
                     m_res = self.car_cdp.assist_car_mileage_flow(target_url=target_url, target_license=target_lic)
@@ -7077,6 +7433,15 @@ class VideoBackupApp:
                         l_val = parts[1] if len(parts) > 1 else target_lic
                         d_val = parts[2] if len(parts) > 2 else ""
                         self.root.after(0, lambda: self._on_mileage_flow_success_ui(l_val, d_val))
+            else:
+                ext_dir = self.car_cdp.ensure_car_helper_extension(
+                    target_url=target_url,
+                    target_license=target_lic,
+                    preferred_account=pref_acct,
+                    auto_submit=True,
+                    auto_mileage=True,
+                )
+                open_chrome_url(target_url, prof, ext_dir=ext_dir)
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -7128,23 +7493,35 @@ class VideoBackupApp:
             self.root.update_idletasks()
 
         def _launch_worker():
+            auto_sub = self.var_car_auto_submit_login.get() if hasattr(self, 'var_car_auto_submit_login') else True
+            auto_mil = self.var_car_auto_mileage.get() if hasattr(self, 'var_car_auto_mileage') else True
+            target_lic = self.get_car_target_license()
             ok = self.car_cdp.launch_or_activate(
                 target_url,
                 profile_name=prof,
                 preferred_account=pref_acct,
+                target_license=target_lic,
+                auto_submit=auto_sub,
+                auto_mileage=auto_mil,
             )
             if ok:
                 time.sleep(0.6)
                 has_tab, is_logged_in, is_login_page, _, _ = self.car_cdp.check_car_login_state(target_url)
                 if has_tab and is_login_page:
-                    auto_sub = self.var_car_auto_submit_login.get() if hasattr(self, 'var_car_auto_submit_login') else True
                     self.car_cdp.assist_car_login_page(
                         target_url=target_url,
                         preferred_account=pref_acct,
                         auto_submit=auto_sub,
                     )
             else:
-                open_chrome_url(target_url, prof)
+                ext_dir = self.car_cdp.ensure_car_helper_extension(
+                    target_url=target_url,
+                    target_license=target_lic,
+                    preferred_account=pref_acct,
+                    auto_submit=auto_sub,
+                    auto_mileage=auto_mil,
+                )
+                open_chrome_url(target_url, prof, ext_dir=ext_dir)
             self.root.after(0, lambda: self._after_car_browser_launched(ok, disp_name, target_url, pref_acct))
 
         threading.Thread(target=_launch_worker, daemon=True).start()
@@ -7169,10 +7546,21 @@ class VideoBackupApp:
             )
 
     def open_car_in_normal_chrome(self):
-        """使用一般日常 Chrome 開啟車輛系統，並自動將防斷線心跳書籤腳本複製至剪貼簿"""
+        """使用一般日常 Chrome 開啟車輛系統（同步掛載小幫手專用原生擴充套件，100% 自動登入與導向）"""
         self.save_config()
         prof = self.get_selected_car_chrome_profile()
         target_url = self.get_selected_car_url()
+        pref_acct = self.get_selected_car_account()
+        target_lic = self.get_car_target_license()
+        auto_sub = self.var_car_auto_submit_login.get() if hasattr(self, 'var_car_auto_submit_login') else True
+        auto_mil = self.var_car_auto_mileage.get() if hasattr(self, 'var_car_auto_mileage') else True
+        ext_dir = self.car_cdp.ensure_car_helper_extension(
+            target_url=target_url,
+            target_license=target_lic,
+            preferred_account=pref_acct,
+            auto_submit=auto_sub,
+            auto_mileage=auto_mil,
+        )
         try:
             bookmarklet = "javascript:" + build_car_heartbeat_bookmarklet()
             self.root.clipboard_clear()
@@ -7180,7 +7568,7 @@ class VideoBackupApp:
             self.root.update()
         except Exception:
             pass
-        open_chrome_url(target_url, prof)
+        open_chrome_url(target_url, prof, ext_dir=ext_dir)
         if hasattr(self, 'lbl_car_status'):
             self.lbl_car_status.config(
                 text=f"🚀 已以日常 Chrome [{prof}] 開啟車輛系統！（防斷線心跳腳本已同步複製至剪貼簿）",
@@ -7325,11 +7713,17 @@ class VideoBackupApp:
                                 self.root.after(0, lambda a=new_acct: self._apply_switched_car_account(a))
                                 prof = self.get_selected_car_chrome_profile()
                                 force_restart = (new_acct not in self.car_cdp._decrypted_car_creds)
+                                auto_sub = self.var_car_auto_submit_login.get() if hasattr(self, 'var_car_auto_submit_login') else True
+                                auto_mil = self.var_car_auto_mileage.get() if hasattr(self, 'var_car_auto_mileage') else True
+                                target_lic = self.get_car_target_license()
                                 self.car_cdp.launch_or_activate(
                                     target_url,
                                     profile_name=prof,
                                     preferred_account=new_acct,
                                     force_restart=force_restart,
+                                    target_license=target_lic,
+                                    auto_submit=auto_sub,
+                                    auto_mileage=auto_mil,
                                 )
                     elif has_tab and is_logged_in and not is_login_page:
                         should_run_mileage = (
