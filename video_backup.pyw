@@ -1596,41 +1596,27 @@ class VehicleCDPController:
             }}
         }}
 
-        var bar = window.document.getElementById('__car_ext_banner');
-        if (!bar) {{
-            bar = window.document.createElement('div');
-            bar.id = '__car_ext_banner';
-            bar.style.cssText = 'position:fixed;top:0;left:0;right:0;background:linear-gradient(90deg,#0f172a,#1e3a8a);color:#f8fafc;padding:9px 16px;font-size:13px;z-index:999999;box-shadow:0 3px 12px rgba(0,0,0,0.3);font-family:sans-serif;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #38bdf8;';
-            (window.document.body || window.document.documentElement).appendChild(bar);
-            if (window.document.body) window.document.body.style.paddingTop = '48px';
-        }}
+        var hasErrMsg = Boolean(targetDoc.body && (targetDoc.body.innerText || '').indexOf('密碼錯誤') !== -1);
 
-        if (CFG.auto_submit) {{
-            bar.innerHTML = '<div style="display:flex;align-items:center;gap:8px;font-weight:bold;"><span style="font-size:16px">⏳</span> <span>【救護小幫手】正在等待帳密就緒並自動登入...</span></div><div style="font-size:12px;color:#7dd3fc">登入後自動切換至里程登記</div>';
-
+        if (CFG.auto_submit && !hasErrMsg) {{
             if (window.__car_ext_sub_timer) return;
             var attempts = 0;
             window.__car_ext_sub_timer = setInterval(function() {{
                 attempts++;
                 var uVal = u ? (u.value || '').trim() : '';
                 var pVal = p ? (p.value || '').trim() : '';
-                var uAuto = false, pAuto = false;
-                try {{ uAuto = Boolean(u && u.matches && u.matches(':-webkit-autofill')); }} catch(e) {{}}
-                try {{ pAuto = Boolean(p && p.matches && p.matches(':-webkit-autofill')); }} catch(e) {{}}
-                var isReady = Boolean((uVal || uAuto) && (pVal || pAuto));
-
-                if (isReady) {{
+                // 重要：content.js 的 JS click() 為非受信任事件，無法解封 Chrome v20 Autofill 幽靈密碼；
+                // 因此僅在確實已有明文密碼 (pVal.length > 0) 時才由擴充套件直接送出，
+                // 若為 Chrome 原生 Autofill (pVal 為空)，則交由主程式 CDP 真實硬體滑鼠點擊 (Input.dispatchMouseEvent) 解封並點擊登入！
+                if (uVal && pVal) {{
                     clearInterval(window.__car_ext_sub_timer);
                     window.__car_ext_sub_timer = null;
                     submitLoginForm(u, p, subBtn, targetDoc, targetWin);
-                }} else if (attempts >= 20) {{
+                }} else if (attempts >= 15) {{
                     clearInterval(window.__car_ext_sub_timer);
                     window.__car_ext_sub_timer = null;
-                    bar.innerHTML = '<div style="display:flex;align-items:center;gap:8px;font-weight:bold;"><span style="font-size:16px">🔑</span> <span>【救護小幫手】請先選取或填入帳密，再點擊「登入」（登入後會自動導向里程登記）。</span></div>';
                 }}
             }}, 350);
-        }} else {{
-            bar.innerHTML = '<div style="display:flex;align-items:center;gap:8px;font-weight:bold;"><span style="font-size:16px">🔑</span> <span>【救護小幫手】車輛系統已就緒，請點擊「登入」完成登入。</span></div>';
         }}
     }}
 
@@ -1883,6 +1869,13 @@ class VehicleCDPController:
         self.active_profile_mode = self._read_saved_active_mode()
         self.active_preferred_account = self._read_saved_preferred_account()
         self._decrypted_car_creds = {}
+        self._last_login_click_ts = 0.0
+        self._login_auto_click_count = 0
+
+    def reset_login_auto_guard(self):
+        """重置自動登入點擊計數與冷卻鎖（於按下按鈕、切換帳號或登入成功後呼叫）"""
+        self._last_login_click_ts = 0.0
+        self._login_auto_click_count = 0
 
     def _read_saved_active_mode(self) -> str:
         try:
@@ -3104,32 +3097,32 @@ class VehicleCDPController:
                     }}
                 }}
 
+                var pageTxt = (targetDoc.body && targetDoc.body.innerText) || '';
+                var hasErrText = (pageTxt.indexOf('密碼錯誤') !== -1 || pageTxt.indexOf('帳號錯誤') !== -1);
+
                 if (cfg.auto_submit && (curUser || uAuto) && hasRealPass) {{
                     var subBtn = targetDoc.querySelector('input[name="Submit"], input[type="submit"][value*="登入"], input.ConWebButton, button[type="submit"]');
                     if (subBtn) {{
-                        var targetWin = targetDoc.defaultView || window;
-                        var nowSubTs = Date.now();
-                        var lastSubLock = Math.max(window.__car_login_submit_lock_ts || 0, targetWin.__car_login_submit_lock_ts || 0);
-                        if (nowSubTs - lastSubLock < 4000) {{
-                            return 'SUBMIT_COOLDOWN:' + (curUser || 'AUTO');
-                        }}
-                        window.__car_login_submit_lock_ts = nowSubTs;
-                        targetWin.__car_login_submit_lock_ts = nowSubTs;
-
-                        if (stNode) {{
-                            stNode.innerHTML = '🚀 <span>已帶入帳號 <strong>' + (curUser || '自動填入') + '</strong>，<strong>正在送出登入，請稍候...</strong></span>';
-                        }}
-
+                        try {{ subBtn.scrollIntoView({{ block: 'center', inline: 'center' }}); }} catch(e) {{}}
+                        var rect = subBtn.getBoundingClientRect();
+                        var offX = 0, offY = 0;
                         try {{
-                            if (typeof targetWin.rememberMe === 'function') targetWin.rememberMe();
-                            else if (typeof rememberMe === 'function') rememberMe();
+                            var cw = targetDoc.defaultView || window;
+                            while (cw && cw !== window.top && cw.frameElement) {{
+                                var fr = cw.frameElement.getBoundingClientRect();
+                                offX += fr.left;
+                                offY += fr.top;
+                                cw = cw.parent;
+                            }}
                         }} catch(e) {{}}
-
-                        // 單次正規點擊登入按鈕（完整攜帶 Chrome Autofill 密碼與 onclick 驗證，不重複連點中斷 POST）
-                        try {{ subBtn.focus(); }} catch(e) {{}}
-                        try {{ subBtn.click(); }} catch(e) {{}}
-
-                        return 'AUTO_SUBMITTING:' + (curUser || 'AUTO');
+                        var btnX = rect.left + rect.width / 2 + offX;
+                        var btnY = rect.top + rect.height / 2 + offY;
+                        // 計算安全空白區座標（位於橫幅下方且避開輸入框，用以先觸發 Chromium User Activation 解封 Autofill 真密碼，且絕不彈出密碼選單擋住按鈕）
+                        var wakeX = Math.max(16, Math.min(40, btnX - 160));
+                        var wakeY = Math.max(96, btnY);
+                        if (btnX > 0 && btnY > 0) {{
+                            return 'NEED_REAL_CLICK:' + Math.round(btnX) + ',' + Math.round(btnY) + ',' + Math.round(wakeX) + ',' + Math.round(wakeY) + ',' + (hasErrText ? '1' : '0') + ',' + (curUser || 'AUTO');
+                        }}
                     }}
                 }}
 
@@ -3140,9 +3133,56 @@ class VehicleCDPController:
         }})({payload_json})"""
 
         ok, res = self._ws_eval(ws, js_assist, timeout=2.0)
-        if ok and isinstance(res, str):
-            return res
-        return "IDLE"
+        if not ok or not isinstance(res, str):
+            return "IDLE"
+
+        if res.startswith("NEED_REAL_CLICK:"):
+            try:
+                raw = res.split("NEED_REAL_CLICK:", 1)[1]
+                parts = raw.split(",")
+                btn_x = float(parts[0])
+                btn_y = float(parts[1])
+                wake_x = float(parts[2])
+                wake_y = float(parts[3])
+                has_err = (parts[4] == "1")
+                cur_user = parts[5] if len(parts) > 5 else "AUTO"
+            except Exception:
+                return "IDLE"
+
+            # 防無限閃爍保護：若已經自動真實點擊過，系統仍顯示「用戶名或密碼錯誤」，立即停止自動點擊並顯示友善提示
+            if has_err and self._login_auto_click_count >= 1:
+                self._ws_eval(
+                    ws,
+                    "(function(){ var n = document.getElementById('__car_acct_status_text'); "
+                    "if (n) n.innerHTML = '⚠️ <span style=\"color:#fde047\">系統回報「用戶名或密碼錯誤」，已暫停自動點擊！請由右側選單切換正確帳號或手動輸入後按下方「登入」。</span>'; })()",
+                    timeout=1.5,
+                )
+                return "STOPPED_CRED_ERROR"
+
+            now_ts = time.time()
+            if self._login_auto_click_count >= 2 or (now_ts - self._last_login_click_ts < 4.5):
+                return "SUBMIT_COOLDOWN:" + cur_user
+
+            self._last_login_click_ts = now_ts
+            self._login_auto_click_count += 1
+
+            # 更新頂部提示文字
+            safe_user_js = json.dumps(cur_user, ensure_ascii=False)
+            self._ws_eval(
+                ws,
+                f"(function(){{ var n = document.getElementById('__car_acct_status_text'); "
+                f"if (n) n.innerHTML = '🚀 <span>已自動填入帳號 <strong>' + {safe_user_js} + '</strong>，<strong>正在以真實滑鼠點擊下方「登入」按鈕...</strong></span>'; }})()",
+                timeout=1.5,
+            )
+
+            # 步驟 1：先以 CDP 硬體級滑鼠輕點安全空白區，觸發 Chromium User Activation 解封 v20 Autofill 密碼
+            self._ws_mouse_click(ws, wake_x, wake_y, timeout=2.5)
+            time.sleep(0.22)
+            # 步驟 2：再以 CDP 硬體級滑鼠精準左鍵點擊下方「登入」按鈕正中央
+            self._ws_mouse_click(ws, btn_x, btn_y, timeout=2.5)
+            return "AUTO_SUBMITTING:" + cur_user
+
+        return res
 
     def check_car_login_state(self, target_url: str = DEFAULT_CAR_SYSTEM_URL) -> tuple:
         """
@@ -3216,6 +3256,7 @@ class VehicleCDPController:
                     if state == "LOGIN_PAGE":
                         return True, False, True, (t.get("title") or tab_title), u
                     elif state == "LOGGED_IN":
+                        self.reset_login_auto_guard()
                         return True, True, False, (t.get("title") or tab_title), u
                     elif state == "LOADING":
                         return True, False, False, (t.get("title") or tab_title), u
@@ -3350,6 +3391,43 @@ class VehicleCDPController:
             val = res.get("result", {}).get("value")
             return True, str(val) if val is not None else "OK"
         return True, str(res)
+
+    def _ws_mouse_click(self, ws_url: str, x: float, y: float, timeout: float = 3.0) -> bool:
+        """
+        透過 CDP Input.dispatchMouseEvent 發送 100% 真實硬體級滑鼠左鍵點擊
+        (isTrusted=true + Chromium User Activation)，可瞬間解封 Chrome v20 App-Bound Autofill 密碼並觸發真實按鈕點擊
+        """
+        try:
+            fx = round(float(x), 1)
+            fy = round(float(y), 1)
+            self._ws_call(ws_url, "Input.dispatchMouseEvent", {
+                "type": "mouseMoved",
+                "x": fx,
+                "y": fy,
+                "button": "none",
+                "buttons": 0,
+            }, timeout=timeout)
+            time.sleep(0.04)
+            ok1, _ = self._ws_call(ws_url, "Input.dispatchMouseEvent", {
+                "type": "mousePressed",
+                "x": fx,
+                "y": fy,
+                "button": "left",
+                "buttons": 1,
+                "clickCount": 1,
+            }, timeout=timeout)
+            time.sleep(0.05)
+            ok2, _ = self._ws_call(ws_url, "Input.dispatchMouseEvent", {
+                "type": "mouseReleased",
+                "x": fx,
+                "y": fy,
+                "button": "left",
+                "buttons": 0,
+                "clickCount": 1,
+            }, timeout=timeout)
+            return bool(ok1 and ok2)
+        except Exception:
+            return False
 
     def assist_car_mileage_flow(
         self,
@@ -7538,13 +7616,14 @@ class VideoBackupApp:
     def on_car_target_license_changed(self, event=None):
         lic = self.get_car_target_license()
         self.config["car_target_license"] = lic
-        if hasattr(self, 'btn_car_mileage'):
-            self.btn_car_mileage.config(text=f"🚑 一鍵里程登記 ({lic})")
+        if hasattr(self, 'btn_car_main_action'):
+            self.btn_car_main_action.config(text=f"🚑 一鍵全自動：車輛登入 ＆ 里程登記 ({lic})")
         self.save_config()
 
     def on_switch_car_account_clicked(self):
         """點擊「⚡ 切換並帶入此帳號」：立即切換優先帶入之同仁帳號並開啟/重新載入車輛系統登入頁"""
         self.save_config()
+        self.car_cdp.reset_login_auto_guard()
         prof = self.get_selected_car_chrome_profile()
         target_url = self.get_selected_car_url()
         pref_acct = self.get_selected_car_account()
@@ -7600,6 +7679,7 @@ class VideoBackupApp:
     def on_click_car_all_in_one(self):
         """【一鍵全自動整合入口】：開瀏覽器 ➔ 自動登入 ➔ 自動切換里程登記 ➔ 自動添加記錄 ➔ 自動選 BVX-0039 救護車 ➔ 自動選今日日期"""
         self.save_config()
+        self.car_cdp.reset_login_auto_guard()
         self.car_mileage_flow_active = True
         self.car_mileage_flow_completed = False
         prof = self.get_selected_car_chrome_profile()
