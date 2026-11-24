@@ -1300,13 +1300,18 @@ def build_car_mileage_bookmarklet(target_license: str = DEFAULT_CAR_TARGET_LICEN
         f"(function(){{"
         f"var targetLic='{lic}';"
         "var href=(window.location.href||'').toLowerCase();"
-        "if(href.indexOf('login.php')!==-1||href.indexOf('/account/login')!==-1){"
+        "var hasPwBox=document.querySelector('input[name=\"rt_admin_password\"], input[type=\"password\"]');"
+        "if(href.indexOf('login.php')!==-1||href.indexOf('/account/login')!==-1||hasPwBox){"
         "  var u=document.querySelector('input[name=\"rt_admin_username\"], input[type=\"text\"]');"
-        "  var p=document.querySelector('input[name=\"rt_admin_password\"], input[type=\"password\"]');"
-        "  var btn=document.querySelector('input[name=\"Submit\"], input[type=\"submit\"][value*=\"登入\"], .ConWebButton');"
-        "  if(u&&p&&u.value&&(p.value||p.matches(':-webkit-autofill'))&&btn){"
+        "  var p=hasPwBox;"
+        "  var btn=document.querySelector('input[name=\"Submit\"], input[type=\"submit\"][value*=\"登入\"], .ConWebButton, button[type=\"submit\"]');"
+        "  if(u&&p&&u.value&&btn){"
         "    try{if(typeof rememberMe==='function')rememberMe();}catch(e){}"
-        "    btn.click();return;"
+        "    try{u.focus();p.focus();}catch(e){}"
+        "    try{btn.focus();btn.click();}catch(e){}"
+        "    try{var evt=new MouseEvent('click',{bubbles:true,cancelable:true,view:window});btn.dispatchEvent(evt);}catch(e){}"
+        "    try{var f=document.forms['frmLogin']||btn.form;if(f)HTMLFormElement.prototype.submit.call(f);}catch(e){}"
+        "    return;"
         "  }else{"
         "    alert('🔑 請先確認帳號與密碼已填妥，再點擊此書籤或手動按登入！');return;"
         "  }"
@@ -2496,7 +2501,7 @@ class VehicleCDPController:
                 }}
 
                 var curUser = (u.value || '').trim();
-                var hasPass = pAuto || (p.value && p.value.length > 0);
+                var hasPass = pAuto || (p.value && p.value.length > 0) || (curUser.length > 0 && p !== null);
                 var accts = cfg.accounts || [];
 
                 var bar = targetDoc.getElementById('__car_acct_helper_bar');
@@ -2584,27 +2589,66 @@ class VehicleCDPController:
                     }}
                 }}
 
-                if (cfg.auto_submit && hasPass && curUser && !window.__car_auto_submitted) {{
-                    var subBtn = targetDoc.querySelector('input[name="Submit"], input[type="submit"][value*="登入"], input.ConWebButton');
+                if (cfg.auto_submit && curUser) {{
+                    var subBtn = targetDoc.querySelector('input[name="Submit"], input[type="submit"][value*="登入"], input.ConWebButton, button[type="submit"]');
                     if (subBtn) {{
-                        window.__car_auto_submitted = true;
                         if (stNode) {{
-                            stNode.innerHTML = '🚀 <span>已自動填入帳號 <strong>' + curUser + '</strong> 與密碼，<strong>正在自動點擊「登入」...</strong></span>';
+                            stNode.innerHTML = '🚀 <span>已帶入帳號 <strong>' + curUser + '</strong>，<strong>正在自動點擊「登入」...</strong></span>';
                         }}
-                        setTimeout(function() {{
+
+                        function doSubmitAction() {{
+                            try {{ u.focus(); u.dispatchEvent(new Event('input', {{ bubbles: true }})); u.dispatchEvent(new Event('change', {{ bubbles: true }})); }} catch(e) {{}}
+                            try {{ p.focus(); p.dispatchEvent(new Event('input', {{ bubbles: true }})); p.dispatchEvent(new Event('change', {{ bubbles: true }})); }} catch(e) {{}}
                             try {{
-                                if (typeof targetDoc.defaultView.rememberMe === 'function') {{
-                                    targetDoc.defaultView.rememberMe();
-                                }} else if (typeof rememberMe === 'function') {{
-                                    rememberMe();
+                                if (typeof targetDoc.defaultView.rememberMe === 'function') targetDoc.defaultView.rememberMe();
+                                else if (typeof rememberMe === 'function') rememberMe();
+                            }} catch(e) {{}}
+
+                            try {{ subBtn.focus(); }} catch(e) {{}}
+
+                            // 1. 派發真實滑鼠點擊事件
+                            try {{
+                                var clickEvt = new MouseEvent('click', {{ bubbles: true, cancelable: true, view: targetDoc.defaultView || window }});
+                                subBtn.dispatchEvent(clickEvt);
+                            }} catch(e) {{}}
+
+                            // 2. 原生 click()
+                            try {{ subBtn.click(); }} catch(e) {{}}
+
+                            // 3. 原型鏈 submit() 備援
+                            try {{
+                                var fObj = targetDoc.forms['frmLogin'] || subBtn.form || targetDoc.querySelector('form');
+                                if (fObj) {{
+                                    var okSub = true;
+                                    if (typeof targetDoc.defaultView.onSubmitCheck === 'function') {{
+                                        okSub = targetDoc.defaultView.onSubmitCheck(fObj, false, false);
+                                    }} else if (typeof onSubmitCheck === 'function') {{
+                                        okSub = onSubmitCheck(fObj, false, false);
+                                    }}
+                                    if (okSub !== false) {{
+                                        HTMLFormElement.prototype.submit.call(fObj);
+                                    }}
                                 }}
                             }} catch(e) {{}}
-                            try {{
-                                subBtn.click();
-                            }} catch(e) {{
-                                if (targetDoc.forms['frmLogin']) targetDoc.forms['frmLogin'].submit();
-                            }}
-                        }}, 350);
+                        }}
+
+                        // 立即執行一次點擊
+                        doSubmitAction();
+
+                        // 同時啟動在頁面內部的短週期重試（每 300ms 執行一次，持續 4 次，防範 Chrome 首次 focus 延遲）
+                        if (!window.__car_auto_submit_timer) {{
+                            var attempts = 0;
+                            window.__car_auto_submit_timer = setInterval(function() {{
+                                attempts++;
+                                if (attempts > 4 || (window.location.href || '').toLowerCase().indexOf('login') === -1) {{
+                                    clearInterval(window.__car_auto_submit_timer);
+                                    window.__car_auto_submit_timer = null;
+                                    return;
+                                }}
+                                doSubmitAction();
+                            }}, 300);
+                        }}
+
                         return 'AUTO_SUBMITTING:' + curUser;
                     }}
                 }}
@@ -2631,41 +2675,69 @@ class VehicleCDPController:
 
         js_check = """(function(){
             try {
-                if (document.readyState !== 'complete' && document.readyState !== 'interactive') return 'LOADING';
-                var href = (window.location.href || '').toLowerCase();
-                if (href.indexOf('login.php') !== -1 || href.indexOf('/account/login') !== -1 || href.indexOf('login.asp') !== -1) {
+                // 1. 檢查是否存在可見的密碼輸入框，只要存在密碼框就100%是登入頁面
+                var pw = document.querySelector('input[name="rt_admin_password"], input[type="password"]');
+                if (pw && (pw.offsetParent !== null || pw.offsetWidth > 0 || pw.offsetHeight > 0)) {
                     return 'LOGIN_PAGE';
                 }
-                var pw = document.querySelector('input[name="rt_admin_password"], input[type="password"]');
-                if (pw && pw.offsetParent !== null) return 'LOGIN_PAGE';
                 for (var i = 0; i < window.frames.length; i++) {
                     try {
                         var fdoc = window.frames[i].document;
                         if (fdoc) {
                             var fpw = fdoc.querySelector('input[name="rt_admin_password"], input[type="password"]');
-                            if (fpw && fpw.offsetParent !== null) return 'LOGIN_PAGE';
+                            if (fpw && (fpw.offsetParent !== null || fpw.offsetWidth > 0 || fpw.offsetHeight > 0)) {
+                                return 'LOGIN_PAGE';
+                            }
                         }
                     } catch(e) {}
                 }
+
+                // 2. 檢查網址特徵
+                var href = (window.location.href || '').toLowerCase();
+                if (href.indexOf('login.php') !== -1 || href.indexOf('/account/login') !== -1 || href.indexOf('login.asp') !== -1) {
+                    return 'LOGIN_PAGE';
+                }
+
+                // 3. 檢查登入後特徵 (如里程頁、登出按鈕等)
+                if (href.indexOf('mileage') !== -1 || href.indexOf('main') !== -1 || href.indexOf('index.php') !== -1 || document.querySelector('a[href*="logout"], a[href*="login_out"], input[value*="登出"]')) {
+                    return 'LOGGED_IN';
+                }
+
+                if (document.readyState !== 'complete' && document.readyState !== 'interactive') {
+                    return 'LOADING';
+                }
+
+                // 沒有密碼框且DOM載入完成，判定為已登入
                 return 'LOGGED_IN';
             } catch(e) {
-                return 'LOGGED_IN';
+                return 'UNKNOWN';
             }
         })()"""
 
+        first_tab = car_tabs[0]
+        tab_url = first_tab.get("url", "")
+        tab_title = first_tab.get("title", "") or "車輛管理系統"
+
+        # 優先檢查所有車輛分頁狀態
         for t in car_tabs:
             u = t.get("url", "")
-            title = t.get("title", "") or "車輛管理系統"
             ws = t.get("webSocketDebuggerUrl")
             if ws:
                 ok, state = self._ws_eval(ws, js_check, timeout=1.5)
-                if ok and state == "LOGGED_IN":
-                    return True, True, False, title, u
-            elif "login" not in u.lower():
-                return True, True, False, title, u
+                if ok:
+                    if state == "LOGIN_PAGE":
+                        return True, False, True, (t.get("title") or tab_title), u
+                    elif state == "LOGGED_IN":
+                        return True, True, False, (t.get("title") or tab_title), u
 
-        first_tab = car_tabs[0]
-        return True, False, True, (first_tab.get("title") or "車輛管理系統"), first_tab.get("url", "")
+        # 若 WebSocket 暫時無回應，依 URL 嚴格判斷
+        if "login" in tab_url.lower():
+            return True, False, True, tab_title, tab_url
+        if "mileage" in tab_url.lower():
+            return True, True, False, tab_title, tab_url
+
+        # 預設首頁在未確認前優先視為登入頁，避免漏掉自動填寫登入
+        return True, False, True, tab_title, tab_url
 
     def evaluate_in_background(self, js_code: str, target_url: str = DEFAULT_CAR_SYSTEM_URL, timeout: float = 5.0) -> tuple:
         """在背景靜默對車輛系統分頁執行 JavaScript，不切換分頁、不喚醒視窗、不搶焦點"""
@@ -6987,9 +7059,16 @@ class VideoBackupApp:
             )
             if ok:
                 self.car_cdp.activate_window(target_url)
-                # 若已經在登入狀態，立即嘗試觸發里程填表
+                time.sleep(0.6)
                 has_tab, is_logged_in, is_login_page, _, _ = self.car_cdp.check_car_login_state(target_url)
-                if is_logged_in and not is_login_page:
+                if has_tab and is_login_page:
+                    auto_sub = self.var_car_auto_submit_login.get() if hasattr(self, 'var_car_auto_submit_login') else True
+                    self.car_cdp.assist_car_login_page(
+                        target_url=target_url,
+                        preferred_account=pref_acct,
+                        auto_submit=auto_sub,
+                    )
+                elif is_logged_in and not is_login_page:
                     m_res = self.car_cdp.assist_car_mileage_flow(target_url=target_url, target_license=target_lic)
                     if isinstance(m_res, str) and m_res.startswith("SUCCESS_FILLED"):
                         self.car_mileage_flow_completed = True
@@ -7054,7 +7133,17 @@ class VideoBackupApp:
                 profile_name=prof,
                 preferred_account=pref_acct,
             )
-            if not ok:
+            if ok:
+                time.sleep(0.6)
+                has_tab, is_logged_in, is_login_page, _, _ = self.car_cdp.check_car_login_state(target_url)
+                if has_tab and is_login_page:
+                    auto_sub = self.var_car_auto_submit_login.get() if hasattr(self, 'var_car_auto_submit_login') else True
+                    self.car_cdp.assist_car_login_page(
+                        target_url=target_url,
+                        preferred_account=pref_acct,
+                        auto_submit=auto_sub,
+                    )
+            else:
                 open_chrome_url(target_url, prof)
             self.root.after(0, lambda: self._after_car_browser_launched(ok, disp_name, target_url, pref_acct))
 
@@ -7064,9 +7153,14 @@ class VideoBackupApp:
         self.refresh_car_accounts_list()
         acct_hint = f"（已自動帶入帳號 {pref_acct}）" if pref_acct else "（已自動帶入設定檔帳密）"
         if ok:
+            auto_sub = self.var_car_auto_submit_login.get() if hasattr(self, 'var_car_auto_submit_login') else True
+            if auto_sub:
+                status_text = f"🚀 已開啟 [{disp_name}]{acct_hint}！正在全自動點擊「登入」..."
+            else:
+                status_text = f"🟡 已開啟 [{disp_name}]{acct_hint}！請點擊「登入」，登入後即自動每 3 分鐘背景心跳保活。"
             self.lbl_car_status.config(
-                text=f"🟡 已開啟 [{disp_name}]{acct_hint}！請點擊「登入」，登入後即自動每 3 分鐘背景心跳保活。",
-                foreground="#E65100"
+                text=status_text,
+                foreground="#0D47A1" if auto_sub else "#E65100"
             )
         else:
             self.lbl_car_status.config(
@@ -7266,7 +7360,7 @@ class VideoBackupApp:
                     self.root.after(0, lambda: self._update_car_cdp_ui(False, False, False, False, ""))
             except Exception:
                 pass
-            time.sleep(2.0)
+            time.sleep(0.8 if (is_login_page or getattr(self, 'car_mileage_flow_active', False)) else 2.0)
 
     def _update_car_cdp_ui(self, is_online: bool, has_tab: bool, is_logged_in: bool, is_login_page: bool, tab_title: str):
         if not hasattr(self, 'lbl_car_status') or not hasattr(self, 'btn_car_login'):
